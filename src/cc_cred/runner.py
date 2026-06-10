@@ -121,6 +121,11 @@ async def run(
             "cwd": str(cwd),
         })
 
+        # Set at the process level too so any subprocess the agent spawns
+        # (hooks, shell commands) inherits the correct token, and so it
+        # shadows any ambient CLAUDE_CODE_OAUTH_TOKEN already in the shell.
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+
         options = ClaudeAgentOptions(
             env={"CLAUDE_CODE_OAUTH_TOKEN": cred.token},
             cwd=cwd,
