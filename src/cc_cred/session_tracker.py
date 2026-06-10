@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from cc_cred._logging import get_logger
+from cc_cred._logging import fmt, get_logger
 
 SESSION_STATE_DIR = Path.home() / ".ccode" / "states" / "sessions"
 
@@ -128,10 +128,13 @@ def get_session_usage(
         usage = extract_from_state(session_id, state)
         log.debug(
             f"session usage from state file  session_id={session_id}"
-            f"  cost_usd={usage.cost_usd}  input_tokens={usage.input_tokens}"
-            f"  output_tokens={usage.output_tokens}"
-            f"  rate_limit_resets_at={usage.rate_limit_resets_at.isoformat() if usage.rate_limit_resets_at else None}"
-            f"  rate_limit_used_pct={usage.rate_limit_used_pct}"
+            + fmt({
+                "cost_usd": usage.cost_usd,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "rate_limit_resets_at": usage.rate_limit_resets_at.isoformat() if usage.rate_limit_resets_at else None,
+                "rate_limit_used_pct": usage.rate_limit_used_pct,
+            })
         )
         return usage
 

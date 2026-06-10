@@ -35,3 +35,20 @@ def mask_token(token: str) -> str:
     if len(token) <= 14:
         return "***"
     return f"{token[:8]}...{token[-4:]}"
+
+
+def fmt(data: object) -> str:
+    """Format a dict/list as an indented JSON block for appending to a debug message.
+
+    Usage:
+        log.debug(f"response  status={code}" + fmt({"headers": ..., "body": ...}))
+
+    Produces:
+        response  status=200
+        {
+          "headers": {...},
+          "body": "..."
+        }
+    """
+    import json
+    return "\n" + json.dumps(data, indent=2, default=str)

@@ -4,7 +4,7 @@ from typing import Optional
 
 import httpx
 
-from cc_cred._logging import get_logger, mask_token
+from cc_cred._logging import get_logger, mask_token, fmt
 
 VERIFY_URL = "https://api.anthropic.com/v1/models"
 VERIFY_HEADERS = {"anthropic-version": "2023-06-01"}
@@ -35,8 +35,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
         body_preview = resp.text[:2000] if resp.text else "(empty)"
         log.debug(
             f"check_token response  status={resp.status_code}"
-            f"  headers={dict(resp.headers)}"
-            f"  body={body_preview!r}"
+            + fmt({"headers": dict(resp.headers), "body": body_preview})
         )
 
         if resp.status_code == 200:
@@ -44,10 +43,10 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
             return "available", None
 
         if resp.status_code in (401, 403):
-            log.debug(f"check_token → rejected  token={masked}  status={resp.status_code}  body={resp.text[:500]!r}")
+            log.debug(f"check_token → rejected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text[:500]}))
             return "invalid", f"API returned {resp.status_code}"
 
-        log.debug(f"check_token → unexpected  token={masked}  status={resp.status_code}  body={resp.text[:500]!r}")
+        log.debug(f"check_token → unexpected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text[:500]}))
         return "unknown", f"Unexpected status {resp.status_code}"
 
     except httpx.TimeoutException as exc:

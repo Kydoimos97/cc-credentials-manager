@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from cc_cred import detection, rotation
-from cc_cred._logging import get_logger, mask_token
+from cc_cred._logging import fmt, get_logger, mask_token
 from cc_cred.store import CredStore
 
 try:
@@ -128,7 +128,7 @@ async def run(
             async for message in query(prompt=actual_prompt, options=options):
                 msg_type = getattr(message, "type", type(message).__name__)
                 msg_subtype = getattr(message, "subtype", None)
-                log.debug(f"SDK ← {msg_type}/{msg_subtype}  {repr(message)[:500]}")
+                log.debug(f"SDK ← {msg_type}/{msg_subtype}" + fmt(repr(message)[:2000]))
 
                 if _is_system_init(message):
                     sid = getattr(message, "data", {}).get("session_id")
@@ -157,13 +157,16 @@ async def run(
                     if sid:
                         session_id = sid
                     log.debug(
-                        f"result  session_id={sid}  is_error={getattr(message, 'is_error', None)}"
+                        f"result  session_id={sid}"
+                        f"  is_error={getattr(message, 'is_error', None)}"
                         f"  subtype={getattr(message, 'subtype', None)}"
-                        f"  api_error_status={getattr(message, 'api_error_status', None)}"
-                        f"  errors={getattr(message, 'errors', None)}"
-                        f"  cost_usd={getattr(message, 'total_cost_usd', None)}"
-                        f"  usage={getattr(message, 'usage', None)}"
                         f"  num_turns={getattr(message, 'num_turns', None)}"
+                        + fmt({
+                            "api_error_status": getattr(message, "api_error_status", None),
+                            "errors": getattr(message, "errors", None),
+                            "cost_usd": getattr(message, "total_cost_usd", None),
+                            "usage": getattr(message, "usage", None),
+                        })
                     )
 
         except ProcessError as exc:

@@ -1,4 +1,4 @@
-from cc_cred._logging import get_logger
+from cc_cred._logging import fmt, get_logger
 from cc_cred.store import CredStore, Credential
 from typing import Optional
 
@@ -17,11 +17,13 @@ def get_next_available(
     log = get_logger()
     credentials = store.list()
 
-    candidates = [
-        f"{c.id[:8]}({c.label or '-'})={'✓' if store.is_available(c.id) else '✗'}"
-        for c in credentials
-    ]
-    log.debug(f"get_next_available  exclude={exclude_id[:8] if exclude_id else None}  candidates=[{', '.join(candidates)}]")
+    log.debug(
+        f"get_next_available  exclude={exclude_id[:8] if exclude_id else None}"
+        + fmt([
+            {"id": c.id[:8], "label": c.label, "available": store.is_available(c.id)}
+            for c in credentials
+        ])
+    )
 
     if not credentials:
         return None
