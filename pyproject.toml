@@ -1,0 +1,20 @@
+[project]
+name = "cc-cred"
+version = "0.1.0"
+description = "Claude credential manager and autonomous runner"
+requires-python = ">=3.10"
+dependencies = [
+    "claude-agent-sdk>=0.0.1",
+    "textual>=0.80.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "tzdata>=2024.1",
+]
+
+[project.scripts]
+claude-auto = "cc_cred.cli_auto:main"
+cc-creds    = "cc_cred.cli_creds:main"
+
+[build-system]
+requires = ["uv_build>=0.7"]
+build-backend = "uv_build"
