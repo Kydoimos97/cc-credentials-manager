@@ -26,20 +26,43 @@ RESUME_PROMPT = (
 
 def _is_system_init(message: object) -> bool:
     return (
-        getattr(message, "type", None) == "system"
-        and getattr(message, "subtype", None) == "init"
-    )
+        type(message).__name__ == "SystemMessage"
+        or getattr(message, "type", None) == "system"
+    ) and getattr(message, "subtype", None) == "init"
 
 
 def _is_assistant(message: object) -> bool:
-    return getattr(message, "type", None) == "assistant"
+    return (
+        type(message).__name__ == "AssistantMessage"
+        or getattr(message, "type", None) == "assistant"
+    )
 
 
 def _is_result(message: object) -> bool:
-    return getattr(message, "type", None) == "result" or (
-        hasattr(message, "is_error") and hasattr(message, "session_id")
-        and not hasattr(message, "content")
+    return (
+        type(message).__name__ == "ResultMessage"
+        or getattr(message, "type", None) == "result"
+        or (
+            hasattr(message, "is_error")
+            and hasattr(message, "session_id")
+            and not hasattr(message, "content")
+        )
     )
+
+
+def _is_rate_limit_event(message: object) -> bool:
+    return type(message).__name__ == "RateLimitEvent"
+
+
+def _rate_limit_status(message: object) -> tuple[str, Optional[int], Optional[float]]:
+    """Extract (status, resets_at_unix, utilization_pct) from a RateLimitEvent."""
+    info = getattr(message, "rate_limit_info", None)
+    if info is None:
+        return "unknown", None, None
+    status = getattr(info, "status", "unknown")
+    resets_at = getattr(info, "resets_at", None)
+    utilization = getattr(info, "utilization", None)
+    return status, resets_at, utilization
 
 
 async def run(
@@ -150,6 +173,28 @@ async def run(
                             sys.stdout.write(text)
                             sys.stdout.flush()
                             last_assistant_text = text
+
+                elif _is_rate_limit_event(message):
+                    rl_status, rl_resets_at, rl_utilization = _rate_limit_status(message)
+                    log.debug(
+                        f"RateLimitEvent  status={rl_status}"
+                        f"  resets_at={rl_resets_at}  utilization={rl_utilization}"
+                        + fmt(getattr(getattr(message, "rate_limit_info", None), "raw", None))
+                    )
+                    if rl_status != "allowed":
+                        from datetime import datetime, timezone as tz
+                        reset_dt = (
+                            datetime.fromtimestamp(rl_resets_at, tz=tz.utc)
+                            if rl_resets_at else None
+                        )
+                        log.debug(f"rate limit active via RateLimitEvent  rotating  reset_at={reset_dt}")
+                        store.mark_limited(cred.id, reset_at=reset_dt)
+                        is_resume = session_id is not None
+                        cred = rotation.rotate(store)
+                        if cred is None:
+                            print("[cc-creds] All credentials exhausted (rate limit event).", file=sys.stderr)
+                            return 1
+                        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
 
                 elif _is_result(message):
                     result_msg = message
