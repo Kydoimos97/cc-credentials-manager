@@ -156,14 +156,16 @@ def list_creds() -> None:
         status_dict = _load_status_dict(store)
         for cred in creds:
             new_status, err = check_token(cred.token)
+            if new_status == "unknown":
+                # Network error — no verdict from the API, preserve existing status.
+                continue
             existing = status_dict.get(cred.id, {})
-            if store.get_status(cred.id).status not in ("limited", "admin_disabled"):
-                status_dict[cred.id] = {
-                    "status": new_status,
-                    "reset_at": existing.get("reset_at"),
-                    "last_checked": now,
-                    "last_error": err,
-                }
+            status_dict[cred.id] = {
+                "status": new_status,
+                "reset_at": existing.get("reset_at") if new_status != "available" else None,
+                "last_checked": now,
+                "last_error": err,
+            }
         store._save_status(status_dict)
 
     for cred in creds:
@@ -212,13 +214,13 @@ def status() -> None:
     with console.status("Checking token…"):
         new_status, err = check_token(active.token)
     log.debug(f"check_token result  new_status={new_status}  error={err}")
-    now = datetime.now(timezone.utc).isoformat()
-    status_dict = _load_status_dict(store)
-    existing = status_dict.get(active.id, {})
-    if cred_status.status not in ("limited", "admin_disabled"):
+    if new_status != "unknown":
+        now = datetime.now(timezone.utc).isoformat()
+        status_dict = _load_status_dict(store)
+        existing = status_dict.get(active.id, {})
         status_dict[active.id] = {
             "status": new_status,
-            "reset_at": existing.get("reset_at"),
+            "reset_at": existing.get("reset_at") if new_status != "available" else None,
             "last_checked": now,
             "last_error": err,
         }
