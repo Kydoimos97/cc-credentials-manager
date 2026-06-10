@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 import json
 import uuid
+
+TOKEN_LIFETIME_DAYS = 365
 
 
 @dataclass
@@ -12,6 +14,7 @@ class Credential:
     token: str
     label: str
     added_at: str
+    expires_at: Optional[str] = None  # ISO datetime, added_at + TOKEN_LIFETIME_DAYS
 
 
 @dataclass
@@ -29,6 +32,17 @@ class CredStats:
     total_cost_usd: float
     total_input_tokens: int
     total_output_tokens: int
+
+
+def _cred_from_dict(c: dict) -> "Credential":
+    """Hydrate a Credential from a stored dict, tolerating missing expires_at."""
+    return Credential(
+        id=c["id"],
+        token=c["token"],
+        label=c["label"],
+        added_at=c["added_at"],
+        expires_at=c.get("expires_at"),
+    )
 
 
 class CredStore:
@@ -80,12 +94,16 @@ class CredStore:
                 raise ValueError("Token already registered")
 
         cred_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        expires_str = (now + timedelta(days=TOKEN_LIFETIME_DAYS)).isoformat()
+
         new_cred = {
             "id": cred_id,
             "token": token,
             "label": label,
-            "added_at": now,
+            "added_at": now_str,
+            "expires_at": expires_str,
         }
         creds.append(new_cred)
         self._save_credentials(creds)
@@ -94,20 +112,13 @@ class CredStore:
             id=cred_id,
             token=token,
             label=label,
-            added_at=now,
+            added_at=now_str,
+            expires_at=expires_str,
         )
 
     def list(self) -> list[Credential]:
         creds = self._load_credentials()
-        return [
-            Credential(
-                id=c["id"],
-                token=c["token"],
-                label=c["label"],
-                added_at=c["added_at"],
-            )
-            for c in creds
-        ]
+        return [_cred_from_dict(c) for c in creds]
 
     def remove(self, id: str) -> None:
         creds = self._load_credentials()
@@ -138,12 +149,7 @@ class CredStore:
         creds = self._load_credentials()
         for cred in creds:
             if cred["id"] == id:
-                return Credential(
-                    id=cred["id"],
-                    token=cred["token"],
-                    label=cred["label"],
-                    added_at=cred["added_at"],
-                )
+                return _cred_from_dict(cred)
         return None
 
     def get_active(self) -> Optional[Credential]:

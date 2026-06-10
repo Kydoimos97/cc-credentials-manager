@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -8,9 +9,39 @@ from rich.console import Console
 from rich.table import Table
 
 from cc_cred import rotation
-from cc_cred.store import CredStore
+from cc_cred.store import CredStore, Credential
 
 console = Console()
+
+SETUP_INSTRUCTIONS = """\
+[bold]To generate a new token:[/]
+
+  1. [cyan]claude auth login[/]         (authenticate with your Claude account)
+  2. [cyan]claude setup-token[/]        (create a long-lived OAuth token)
+  3. Copy the printed token (starts with [dim]sk-ant-...[/])
+  4. [cyan]cc-creds add <token> --label "my account"[/]
+"""
+
+
+def _expiry_display(cred: Credential) -> tuple[str, str]:
+    """Return (display_string, colour) for the token expiry date."""
+    if not cred.expires_at:
+        return "unknown", "dim"
+    try:
+        expires = datetime.fromisoformat(cred.expires_at)
+        now = datetime.now(timezone.utc)
+        days_left = (expires - now).days
+        date_str = expires.astimezone().strftime("%Y-%m-%d")
+        if days_left < 0:
+            return f"{date_str} [EXPIRED]", "red"
+        elif days_left <= 7:
+            return f"{date_str} ({days_left}d)", "red"
+        elif days_left <= 30:
+            return f"{date_str} ({days_left}d)", "yellow"
+        else:
+            return f"{date_str} ({days_left}d)", "green"
+    except ValueError:
+        return cred.expires_at, "dim"
 
 
 @click.group(invoke_without_command=True)
@@ -26,15 +57,27 @@ def main(ctx: click.Context) -> None:
 
 
 @main.command()
-@click.argument("token")
+@click.argument("token", required=False)
 @click.option("--label", "-l", default="", help="Human-readable label for this credential.")
-def add(token: str, label: str) -> None:
-    """Register a new OAuth token."""
+def add(token: Optional[str], label: str) -> None:
+    """Register a new OAuth token.
+
+    If you don't have a token yet, run without arguments to see setup instructions.
+    """
+    if not token:
+        console.print(SETUP_INSTRUCTIONS)
+        return
+
     store = CredStore()
     try:
         cred = store.add(token, label)
-        console.print(f"[green]Added credential[/] [dim]{cred.id[:8]}[/]" + (f" ({label})" if label else ""))
-        if store.get_active() is None:
+        expiry_str, _ = _expiry_display(cred)
+        console.print(
+            f"[green]Added credential[/] [dim]{cred.id[:8]}[/]"
+            + (f" ({label})" if label else "")
+            + f"  expires {expiry_str}"
+        )
+        if len(store.list()) == 1:
             store.set_active(cred.id)
             console.print("[dim]Set as active (first credential).[/]")
     except ValueError as exc:
@@ -49,7 +92,9 @@ def list_creds() -> None:
     creds = store.list()
 
     if not creds:
-        console.print("[dim]No credentials registered. Run 'cc-creds add <token>'.[/]")
+        console.print("[dim]No credentials registered.[/]")
+        console.print()
+        console.print(SETUP_INSTRUCTIONS)
         return
 
     active = store.get_active()
@@ -61,6 +106,7 @@ def list_creds() -> None:
     table.add_column("Label")
     table.add_column("Status")
     table.add_column("Resets At")
+    table.add_column("Expires")
 
     colour_map = {
         "available": "green",
@@ -71,15 +117,17 @@ def list_creds() -> None:
 
     for cred in creds:
         status = store.get_status(cred.id)
-        colour = colour_map.get(status.status, "white")
+        status_colour = colour_map.get(status.status, "white")
         marker = "[bold green]▶[/]" if cred.id == active_id else " "
         reset_str = status.reset_at or "—"
+        expiry_str, expiry_colour = _expiry_display(cred)
         table.add_row(
             marker,
             cred.id[:8],
             cred.label or "—",
-            f"[{colour}]{status.status}[/]",
+            f"[{status_colour}]{status.status}[/]",
             reset_str,
+            f"[{expiry_colour}]{expiry_str}[/]",
         )
 
     console.print(table)
@@ -93,14 +141,18 @@ def status() -> None:
 
     if active is None:
         console.print("[yellow]No active credential set.[/]")
+        console.print()
+        console.print(SETUP_INSTRUCTIONS)
         sys.exit(1)
 
     cred_status = store.get_status(active.id)
     colour_map = {"available": "green", "limited": "yellow", "admin_disabled": "red", "unknown": "dim"}
     colour = colour_map.get(cred_status.status, "white")
+    expiry_str, expiry_colour = _expiry_display(active)
 
     console.print(f"[bold]Active:[/] {active.id[:8]}" + (f" ({active.label})" if active.label else ""))
     console.print(f"[bold]Status:[/] [{colour}]{cred_status.status}[/]")
+    console.print(f"[bold]Expires:[/] [{expiry_colour}]{expiry_str}[/]")
     if cred_status.reset_at:
         console.print(f"[bold]Resets:[/] {cred_status.reset_at}")
 
@@ -175,7 +227,7 @@ def hook_event() -> None:
     Reads JSON payload from stdin. If error is 'rate_limit', marks the active
     credential as limited and parses the reset time from last_assistant_message.
     """
-    from cc_cred.detection import is_rate_limited_text, parse_reset_time
+    from cc_cred.detection import parse_reset_time
 
     try:
         raw = sys.stdin.read()
@@ -200,7 +252,7 @@ def hook_event() -> None:
 
     last_failure = store.STORE_DIR / "last-stop-failure.json"
     record = {
-        "ts": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
         "session_id": payload.get("session_id"),
         "token_id": active.id,
         "reset_at": reset_at.isoformat() if reset_at else None,

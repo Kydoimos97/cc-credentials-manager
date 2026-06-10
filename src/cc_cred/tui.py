@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -43,6 +43,27 @@ def _format_reset(reset_at: Optional[str]) -> str:
         return local.strftime("%Y-%m-%d %H:%M %Z")
     except ValueError:
         return reset_at
+
+
+def _format_expiry(expires_at: Optional[str]) -> tuple[str, str]:
+    """Return (text, colour) for token expiry."""
+    if not expires_at:
+        return "unknown", "dim"
+    try:
+        expires = datetime.fromisoformat(expires_at)
+        now = datetime.now(timezone.utc)
+        days_left = (expires - now).days
+        date_str = expires.astimezone().strftime("%Y-%m-%d")
+        if days_left < 0:
+            return f"{date_str} EXPIRED", "red"
+        elif days_left <= 7:
+            return f"{date_str} ({days_left}d)", "red"
+        elif days_left <= 30:
+            return f"{date_str} ({days_left}d)", "yellow"
+        else:
+            return f"{date_str} ({days_left}d)", "green"
+    except ValueError:
+        return expires_at, "dim"
 
 
 class AddKeyModal(ModalScreen):
@@ -98,7 +119,7 @@ class CredentialsTab(Container):
     def _build_table(self) -> None:
         table = self.query_one("#creds-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("", "ID", "Label", "Token", "Status", "Resets")
+        table.add_columns("", "ID", "Label", "Token", "Status", "Resets", "Expires")
 
         active = self._store.get_active()
         active_id = active.id if active else None
@@ -107,6 +128,7 @@ class CredentialsTab(Container):
             status = self._store.get_status(cred.id)
             colour = STATUS_COLOURS.get(status.status, "white")
             marker = "[bold green]▶[/]" if cred.id == active_id else " "
+            expiry_text, expiry_colour = _format_expiry(cred.expires_at)
             table.add_row(
                 marker,
                 cred.id[:8],
@@ -114,6 +136,7 @@ class CredentialsTab(Container):
                 _mask_token(cred.token),
                 f"[{colour}]{status.status}[/]",
                 _format_reset(status.reset_at),
+                f"[{expiry_colour}]{expiry_text}[/]",
                 key=cred.id,
             )
 
