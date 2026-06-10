@@ -10,8 +10,19 @@ from rich.table import Table
 
 from cc_cred import rotation
 from cc_cred.store import CredStore, Credential
+from cc_cred.verify import check_token, should_reverify
 
 console = Console()
+
+def _load_status_dict(store: CredStore) -> dict:
+    """Return the raw status dict from cred-status.json."""
+    path = store._status_path()
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        import json as _j
+        return _j.load(f)
+
 
 SETUP_INSTRUCTIONS = """\
 [bold]To generate a new token:[/]
@@ -71,18 +82,39 @@ def add(token: Optional[str], label: str) -> None:
     store = CredStore()
     try:
         cred = store.add(token, label)
-        expiry_str, _ = _expiry_display(cred)
-        console.print(
-            f"[green]Added credential[/] [dim]{cred.id[:8]}[/]"
-            + (f" ({label})" if label else "")
-            + f"  expires {expiry_str}"
-        )
-        if len(store.list()) == 1:
-            store.set_active(cred.id)
-            console.print("[dim]Set as active (first credential).[/]")
     except ValueError as exc:
         console.print(f"[red]Error:[/] {exc}", err=True)
         sys.exit(1)
+
+    with console.status("Verifying token…"):
+        status_val, err = check_token(token)
+
+    now = datetime.now(timezone.utc).isoformat()
+    store._save_status({
+        **{k: v for k, v in _load_status_dict(store).items()},
+        cred.id: {
+            "status": status_val if status_val != "invalid" else "admin_disabled",
+            "reset_at": None,
+            "last_checked": now,
+            "last_error": err,
+        },
+    })
+
+    if status_val == "invalid":
+        console.print(f"[red]Token rejected by API ({err}). Credential stored but marked disabled.[/]")
+    elif status_val == "unknown":
+        console.print(f"[yellow]Could not verify token ({err}). Stored as unknown — will retry on next use.[/]")
+    else:
+        expiry_str, _ = _expiry_display(cred)
+        console.print(
+            f"[green]Added and verified[/] [dim]{cred.id[:8]}[/]"
+            + (f" ({label})" if label else "")
+            + f"  expires {expiry_str}"
+        )
+
+    if len(store.list()) == 1:
+        store.set_active(cred.id)
+        console.print("[dim]Set as active (first credential).[/]")
 
 
 @main.command(name="list")
@@ -146,7 +178,25 @@ def status() -> None:
         sys.exit(1)
 
     cred_status = store.get_status(active.id)
-    colour_map = {"available": "green", "limited": "yellow", "admin_disabled": "red", "unknown": "dim"}
+
+    if should_reverify(cred_status.last_checked):
+        with console.status("Checking token…"):
+            new_status, err = check_token(active.token)
+        now = datetime.now(timezone.utc).isoformat()
+        status_dict = _load_status_dict(store)
+        existing = status_dict.get(active.id, {})
+        # Only update if not currently rate-limited (don't overwrite a known limit)
+        if cred_status.status not in ("limited", "admin_disabled"):
+            status_dict[active.id] = {
+                "status": new_status,
+                "reset_at": existing.get("reset_at"),
+                "last_checked": now,
+                "last_error": err,
+            }
+            store._save_status(status_dict)
+            cred_status = store.get_status(active.id)
+
+    colour_map = {"available": "green", "limited": "yellow", "admin_disabled": "red", "unknown": "dim", "invalid": "red"}
     colour = colour_map.get(cred_status.status, "white")
     expiry_str, expiry_colour = _expiry_display(active)
 
