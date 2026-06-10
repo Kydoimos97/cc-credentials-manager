@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -187,13 +186,22 @@ def list_creds() -> None:
 
 
 @main.command()
-def status() -> None:
+@click.option("--label", "label_only", is_flag=True, default=False,
+              help="Print only the active credential label. No API calls. Safe for use in hooks and scripts.")
+def status(label_only: bool) -> None:
     """Show the currently active credential."""
+    store = CredStore()
+    active = store.get_active()
+
+    if label_only:
+        if active is None:
+            sys.exit(1)
+        print(active.label or active.id[:8])
+        return
+
     from cc_cred._logging import get_logger, mask_token
     log = get_logger()
 
-    store = CredStore()
-    active = store.get_active()
 
     log.debug("status command", extra={
         "active_id": active.id[:8] if active else None,
@@ -352,24 +360,12 @@ def hook_event() -> None:
 
     store = CredStore()
 
-    # Determine session owner via the inherited env var — the hook process is a
-    # subprocess of Claude Code, so it inherits CLAUDE_CODE_OAUTH_TOKEN which is
-    # the actual token the session was running with. Fall back to get_active() if
-    # the var is absent (e.g. session predates cc-creds setup).
-    session_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    if session_token:
-        session_cred = store.get_by_token(session_token)
-        log.debug("session owner from env var", extra={
-            "found": session_cred is not None,
-            "id": session_cred.id[:8] if session_cred else None,
-        })
-    else:
-        session_cred = None
-        log.debug("CLAUDE_CODE_OAUTH_TOKEN not in env, falling back to get_active()")
-
-    active = session_cred or store.get_active()
+    # Hook subprocesses don't receive CLAUDE_CODE_OAUTH_TOKEN in their env —
+    # Claude Code filters sensitive vars from hook payloads. Use get_active()
+    # directly: it reads active.key from disk and has no env var dependency.
+    active = store.get_active()
     if active is None:
-        log.debug("hook-event: no active credential found, skipping session tracking")
+        log.debug("hook-event: no active credential, skipping")
         sys.exit(0)
 
     # Fetch usage from session state file, falling back to transcript.
