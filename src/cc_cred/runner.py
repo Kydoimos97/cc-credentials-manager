@@ -13,6 +13,7 @@ try:
         query,
         ClaudeAgentOptions,
         ProcessError,
+        CLINotFoundError,
     )
     _SDK_AVAILABLE = True
 except ImportError:
@@ -79,7 +80,7 @@ async def run(
       Forces that credential to be treated as rate-limited before the SDK call.
     """
     if not _SDK_AVAILABLE:
-        print("[cc-creds] claude_agent_sdk is not installed. Run: pip install claude-agent-sdk", file=sys.stderr)
+        print("[cc-creds] claude-agent-sdk is not installed. Run: uv tool install git+https://github.com/Kydoimos97/cc-credentials-manager.git", file=sys.stderr)
         return 1
 
     log = get_logger()
@@ -221,6 +222,14 @@ async def run(
                             "usage": getattr(message, "usage", None),
                         })
                     )
+
+        except CLINotFoundError:
+            print(
+                "[cc-creds] Claude Code CLI not found. Install it first:\n"
+                "  npm install -g @anthropic-ai/claude-code",
+                file=sys.stderr,
+            )
+            return 1
 
         except ProcessError as exc:
             log.debug(
