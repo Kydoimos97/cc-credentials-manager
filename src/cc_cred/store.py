@@ -303,6 +303,20 @@ class CredStore:
         with open(sessions_path, "a") as f:
             f.write(json.dumps(record) + "\n")
 
+    def session_exists(self, session_id: str) -> bool:
+        """Return True if session_id already has a record in sessions.jsonl."""
+        path = self._sessions_path()
+        if not path.exists():
+            return False
+        with open(path, "r") as f:
+            for line in f:
+                try:
+                    if json.loads(line).get("session_id") == session_id:
+                        return True
+                except json.JSONDecodeError:
+                    continue
+        return False
+
     def update_session(
         self,
         session_id: str,

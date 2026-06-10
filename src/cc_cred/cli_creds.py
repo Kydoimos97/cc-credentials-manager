@@ -283,7 +283,7 @@ def install_hook() -> None:
     installed: list[str] = []
     already: list[str] = []
 
-    for event in ("Stop", "StopFailure"):
+    for event in ("Stop", "StopFailure", "UserPromptSubmit"):
         event_hooks = hooks.setdefault(event, [])
         found = any(
             h.get("command") == hook_command
@@ -338,7 +338,7 @@ def hook_event() -> None:
         "has_transcript": bool(transcript_path),
     })
 
-    if hook_type not in ("Stop", "StopFailure"):
+    if hook_type not in ("Stop", "StopFailure", "UserPromptSubmit"):
         sys.exit(0)
 
     store = CredStore()
@@ -356,18 +356,23 @@ def hook_event() -> None:
         "output_tokens": usage.output_tokens if usage else None,
     })
 
-    # Record the session in sessions.jsonl if not already tracked (interactive sessions
-    # won't have been registered by the runner).
+    # Upsert the session record in sessions.jsonl.
+    # UserPromptSubmit fires mid-session — register on first occurrence, then keep
+    # updating with rolling stats. Stop/StopFailure finalise with the terminal status.
     if session_id:
-        try:
+        if not store.session_exists(session_id):
             store.register_session(session_id, active.id, cwd, "")
-        except Exception:
-            pass  # Already registered by runner — update_session below handles the rest.
 
         if usage:
-            status_val = "error" if (hook_type == "StopFailure" and error != "rate_limit") else \
-                         "interrupted" if (hook_type == "StopFailure" and error == "rate_limit") else \
-                         "success"
+            if hook_type == "UserPromptSubmit":
+                status_val = "running"
+            elif hook_type == "StopFailure" and error == "rate_limit":
+                status_val = "interrupted"
+            elif hook_type == "StopFailure":
+                status_val = "error"
+            else:
+                status_val = "success"
+
             store.update_session(
                 session_id,
                 cost_usd=usage.cost_usd,
