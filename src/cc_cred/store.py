@@ -157,6 +157,13 @@ class CredStore:
                 return _cred_from_dict(cred)
         return None
 
+    def get_by_token(self, token: str) -> Optional[Credential]:
+        """Return the credential whose token matches, or None."""
+        for cred in self._load_credentials():
+            if cred.get("token") == token:
+                return _cred_from_dict(cred)
+        return None
+
     def get_active(self) -> Optional[Credential]:
         active_path = self._active_path()
         if not active_path.exists():

@@ -344,7 +344,23 @@ def hook_event() -> None:
         sys.exit(0)
 
     store = CredStore()
-    active = store.get_active()
+
+    # Determine session owner via the inherited env var — the hook process is a
+    # subprocess of Claude Code, so it inherits CLAUDE_CODE_OAUTH_TOKEN which is
+    # the actual token the session was running with. Fall back to get_active() if
+    # the var is absent (e.g. session predates cc-creds setup).
+    session_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if session_token:
+        session_cred = store.get_by_token(session_token)
+        log.debug("session owner from env var", extra={
+            "found": session_cred is not None,
+            "id": session_cred.id[:8] if session_cred else None,
+        })
+    else:
+        session_cred = None
+        log.debug("CLAUDE_CODE_OAUTH_TOKEN not in env, falling back to get_active()")
+
+    active = session_cred or store.get_active()
     if active is None:
         sys.exit(0)
 
@@ -416,5 +432,25 @@ def hook_event() -> None:
         }
         with open(last_failure, "w") as f:
             json.dump(record, f, indent=2)
+
+        if next_cred is None:
+            # All credentials exhausted — surface a helpful message in the terminal.
+            # Claude Code displays systemMessage output from StopFailure hooks.
+            creds = store.list()
+            reset_hints = []
+            for c in creds:
+                st = store.get_status(c.id)
+                if st.reset_at:
+                    reset_hints.append(f"{c.label or c.id[:8]} resets {st.reset_at}")
+            hint = "  " + " / ".join(reset_hints) if reset_hints else ""
+            msg = (
+                "All cc-creds credentials are exhausted."
+                + (f"\n{hint}" if hint else "")
+                + "\n\nTo add another account:\n"
+                + "  1. claude auth login\n"
+                + "  2. claude setup-token\n"
+                + "  3. cc-creds add <token> --label \"new account\""
+            )
+            print(json.dumps({"systemMessage": msg}))
 
     sys.exit(0)
