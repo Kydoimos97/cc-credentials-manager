@@ -23,11 +23,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
     log = get_logger()
     masked = mask_token(token)
 
-    log.debug("check_token", extra={
-        "token": masked,
-        "url": VERIFY_URL,
-        "timeout": VERIFY_TIMEOUT,
-    })
+    log.debug(f"check_token  token={masked}  url={VERIFY_URL}  timeout={VERIFY_TIMEOUT}s")
 
     try:
         resp = httpx.get(
@@ -36,47 +32,30 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
             timeout=VERIFY_TIMEOUT,
         )
 
-        log.debug("check_token response", extra={
-            "token": masked,
-            "status_code": resp.status_code,
-            "response_headers": dict(resp.headers),
-            "response_body": resp.text[:2000] if resp.text else None,
-        })
+        body_preview = resp.text[:2000] if resp.text else "(empty)"
+        log.debug(
+            f"check_token response  status={resp.status_code}"
+            f"  headers={dict(resp.headers)}"
+            f"  body={body_preview!r}"
+        )
 
         if resp.status_code == 200:
-            log.debug("check_token → available", extra={"token": masked})
+            log.debug(f"check_token → available  token={masked}")
             return "available", None
 
         if resp.status_code in (401, 403):
-            log.debug("check_token → rejected", extra={
-                "token": masked,
-                "status_code": resp.status_code,
-                "response_body": resp.text[:500],
-            })
+            log.debug(f"check_token → rejected  token={masked}  status={resp.status_code}  body={resp.text[:500]!r}")
             return "invalid", f"API returned {resp.status_code}"
 
-        log.debug("check_token → unexpected status", extra={
-            "token": masked,
-            "status_code": resp.status_code,
-            "response_body": resp.text[:500],
-        })
+        log.debug(f"check_token → unexpected  token={masked}  status={resp.status_code}  body={resp.text[:500]!r}")
         return "unknown", f"Unexpected status {resp.status_code}"
 
     except httpx.TimeoutException as exc:
-        log.debug("check_token timed out", extra={
-            "token": masked,
-            "url": VERIFY_URL,
-            "error": str(exc),
-        })
+        log.debug(f"check_token timed out  token={masked}  url={VERIFY_URL}  error={exc}")
         return "unknown", "Request timed out"
 
     except httpx.RequestError as exc:
-        log.debug("check_token request error", extra={
-            "token": masked,
-            "url": VERIFY_URL,
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-        })
+        log.debug(f"check_token request error  token={masked}  type={type(exc).__name__}  error={exc}")
         return "unknown", str(exc)
 
 

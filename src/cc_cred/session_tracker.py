@@ -30,13 +30,13 @@ def read_session_state(session_id: str) -> Optional[dict]:
     """Return the raw dict from ~/.ccode/states/sessions/{session_id}.jsonl or None."""
     log = get_logger()
     path = SESSION_STATE_DIR / f"{session_id}.jsonl"
-    log.debug("read_session_state", extra={"path": str(path), "exists": path.exists()})
+    log.debug(f"read_session_state  path={path}  exists={path.exists()}")
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        log.debug("read_session_state failed", extra={"error": str(exc)})
+        log.debug(f"read_session_state failed  error={exc}")
         return None
 
 
@@ -71,7 +71,7 @@ def parse_transcript(session_id: str, transcript_path: str) -> SessionUsage:
     """
     log = get_logger()
     path = Path(transcript_path)
-    log.debug("parse_transcript fallback", extra={"path": str(path)})
+    log.debug(f"parse_transcript fallback  path={path}")
 
     input_tokens = 0
     output_tokens = 0
@@ -94,7 +94,7 @@ def parse_transcript(session_id: str, transcript_path: str) -> SessionUsage:
                 input_tokens += usage.get("cache_read_input_tokens", 0)
                 output_tokens += usage.get("output_tokens", 0)
     except (OSError, UnicodeDecodeError) as exc:
-        log.debug("parse_transcript error", extra={"error": str(exc)})
+        log.debug(f"parse_transcript error  error={exc}")
         return SessionUsage(
             session_id=session_id,
             cost_usd=None,
@@ -105,10 +105,7 @@ def parse_transcript(session_id: str, transcript_path: str) -> SessionUsage:
             source="none",
         )
 
-    log.debug("parse_transcript result", extra={
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-    })
+    log.debug(f"parse_transcript result  input_tokens={input_tokens}  output_tokens={output_tokens}")
     return SessionUsage(
         session_id=session_id,
         cost_usd=None,
@@ -129,21 +126,20 @@ def get_session_usage(
     state = read_session_state(session_id)
     if state is not None:
         usage = extract_from_state(session_id, state)
-        log.debug("session usage from state file", extra={
-            "session_id": session_id,
-            "cost_usd": usage.cost_usd,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "rate_limit_resets_at": usage.rate_limit_resets_at.isoformat() if usage.rate_limit_resets_at else None,
-            "rate_limit_used_pct": usage.rate_limit_used_pct,
-        })
+        log.debug(
+            f"session usage from state file  session_id={session_id}"
+            f"  cost_usd={usage.cost_usd}  input_tokens={usage.input_tokens}"
+            f"  output_tokens={usage.output_tokens}"
+            f"  rate_limit_resets_at={usage.rate_limit_resets_at.isoformat() if usage.rate_limit_resets_at else None}"
+            f"  rate_limit_used_pct={usage.rate_limit_used_pct}"
+        )
         return usage
 
     if transcript_path:
-        log.debug("state file missing, falling back to transcript", extra={"session_id": session_id})
+        log.debug(f"state file missing, falling back to transcript  session_id={session_id}")
         return parse_transcript(session_id, transcript_path)
 
-    log.debug("no usage source available", extra={"session_id": session_id})
+    log.debug(f"no usage source available  session_id={session_id}")
     return SessionUsage(
         session_id=session_id,
         cost_usd=None,

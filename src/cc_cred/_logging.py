@@ -9,7 +9,6 @@ import os
 
 def configure_logging() -> None:
     """Call once at CLI entry point startup."""
-    import sys
     from rich.console import Console
     from logspark import logger, spark_log_manager
     from logspark.Handlers.Rich.SparkRichHandler import SparkRichHandler

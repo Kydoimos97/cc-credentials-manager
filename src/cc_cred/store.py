@@ -177,7 +177,7 @@ class CredStore:
         if cred is None:
             raise KeyError(f"Credential {id} not found")
 
-        _log().debug("set_active", extra={"id": id[:8], "label": cred.label})
+        _log().debug(f"set_active  id={id[:8]}  label={cred.label!r}")
         active_path = self._active_path()
         active_path.write_text(id)
         self.sync_to_settings(cred)
@@ -193,13 +193,7 @@ class CredStore:
         from cc_cred._logging import mask_token
         settings_path = Path.home() / ".claude" / "settings.json"
 
-        _log().debug("sync_to_settings", extra={
-            "credential_id": cred.id[:8],
-            "label": cred.label,
-            "token": mask_token(cred.token),
-            "settings_path": str(settings_path),
-            "settings_exists": settings_path.exists(),
-        })
+        _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}  path={settings_path}  exists={settings_path.exists()}")
 
         if not settings_path.exists():
             return
@@ -214,9 +208,9 @@ class CredStore:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 _json.dump(settings, f, indent=2)
             tmp_path.replace(settings_path)
-            _log().debug("sync_to_settings complete", extra={"settings_path": str(settings_path)})
+            _log().debug(f"sync_to_settings complete  path={settings_path}")
         except (OSError, ValueError) as exc:
-            _log().debug("sync_to_settings failed", extra={"error": str(exc)})
+            _log().debug(f"sync_to_settings failed  error={exc}")
 
     def get_status(self, id: str) -> TokenStatus:
         status_dict = self._load_status()
@@ -256,10 +250,7 @@ class CredStore:
         return True
 
     def mark_limited(self, id: str, reset_at: Optional[datetime] = None) -> None:
-        _log().debug("mark_limited", extra={
-            "id": id[:8],
-            "reset_at": reset_at.isoformat() if reset_at else None,
-        })
+        _log().debug(f"mark_limited  id={id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}")
         status_dict = self._load_status()
         reset_str = None
         if reset_at is not None:
@@ -274,7 +265,7 @@ class CredStore:
         self._save_status(status_dict)
 
     def mark_available(self, id: str) -> None:
-        _log().debug("mark_available", extra={"id": id[:8]})
+        _log().debug(f"mark_available  id={id[:8]}")
         status_dict = self._load_status()
         status_dict[id] = {
             "status": "available",

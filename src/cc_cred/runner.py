@@ -65,24 +65,20 @@ async def run(
     max_attempts = max(len(all_creds) + 1, 1)
     is_resume = session_id is not None
 
-    log.debug("Runner starting", extra={
-        "prompt_preview": prompt[:120],
-        "cwd": str(cwd),
-        "session_id": session_id,
-        "credential_count": len(all_creds),
-        "max_attempts": max_attempts,
-    })
+    log.debug(
+        f"runner start  creds={len(all_creds)}  max_attempts={max_attempts}"
+        f"  session_id={session_id}  cwd={cwd}  prompt={prompt[:80]!r}"
+    )
 
     for attempt in range(max_attempts):
-        log.debug("Attempt starting", extra={"attempt": attempt})
+        log.debug(f"attempt {attempt}")
 
         cred = store.get_active()
 
         if cred is None or not store.is_available(cred.id):
-            log.debug("Active credential unavailable, rotating", extra={
-                "active_id": cred.id[:8] if cred else None,
-                "status": store.get_status(cred.id).status if cred else "none",
-            })
+            active_id = cred.id[:8] if cred else None
+            status = store.get_status(cred.id).status if cred else "none"
+            log.debug(f"active cred unavailable  id={active_id}  status={status}  → rotating")
             cred = rotation.rotate(store)
             if cred is None:
                 print("[cc-creds] No available credentials.", file=sys.stderr)
@@ -96,11 +92,7 @@ async def run(
             )
             force_var = f"CC_CREDS_FORCE_LIMIT_{cred_index}"
             if cred_index and os.environ.get(force_var):
-                log.debug("Force-limit env var active, marking limited and rotating", extra={
-                    "env_var": force_var,
-                    "cred_id": cred.id[:8],
-                    "label": cred.label,
-                })
+                log.debug(f"force-limit  env_var={force_var}  cred={cred.id[:8]}  label={cred.label!r}  → rotating")
                 store.mark_limited(cred.id, reset_at=None)
                 cred = rotation.rotate(store)
                 if cred is None:
@@ -111,15 +103,11 @@ async def run(
 
         actual_prompt = RESUME_PROMPT if is_resume else prompt
 
-        log.debug("Invoking SDK query", extra={
-            "credential_id": cred.id[:8],
-            "credential_label": cred.label,
-            "token": mask_token(cred.token),
-            "is_resume": is_resume,
-            "resume_session_id": session_id,
-            "prompt_preview": actual_prompt[:120],
-            "cwd": str(cwd),
-        })
+        log.debug(
+            f"SDK query  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}"
+            f"  is_resume={is_resume}  resume_id={session_id}  cwd={cwd}"
+            f"  prompt={actual_prompt[:80]!r}"
+        )
 
         # Set at the process level too so any subprocess the agent spawns
         # (hooks, shell commands) inherits the correct token, and so it
@@ -140,11 +128,7 @@ async def run(
             async for message in query(prompt=actual_prompt, options=options):
                 msg_type = getattr(message, "type", type(message).__name__)
                 msg_subtype = getattr(message, "subtype", None)
-                log.debug("SDK message", extra={
-                    "type": msg_type,
-                    "subtype": msg_subtype,
-                    "raw": repr(message)[:500],
-                })
+                log.debug(f"SDK ← {msg_type}/{msg_subtype}  {repr(message)[:500]}")
 
                 if _is_system_init(message):
                     sid = getattr(message, "data", {}).get("session_id")
@@ -157,10 +141,7 @@ async def run(
                             prompt[:100],
                         )
                         registered = True
-                        log.debug("Session registered", extra={
-                            "session_id": sid,
-                            "credential_id": cred.id[:8],
-                        })
+                        log.debug(f"session registered  session_id={sid}  cred={cred.id[:8]}")
 
                 elif _is_assistant(message):
                     for block in getattr(message, "content", []):
@@ -175,31 +156,27 @@ async def run(
                     sid = getattr(message, "session_id", None)
                     if sid:
                         session_id = sid
-                    log.debug("Result message received", extra={
-                        "session_id": sid,
-                        "is_error": getattr(message, "is_error", None),
-                        "subtype": getattr(message, "subtype", None),
-                        "api_error_status": getattr(message, "api_error_status", None),
-                        "errors": getattr(message, "errors", None),
-                        "total_cost_usd": getattr(message, "total_cost_usd", None),
-                        "usage": getattr(message, "usage", None),
-                        "num_turns": getattr(message, "num_turns", None),
-                    })
+                    log.debug(
+                        f"result  session_id={sid}  is_error={getattr(message, 'is_error', None)}"
+                        f"  subtype={getattr(message, 'subtype', None)}"
+                        f"  api_error_status={getattr(message, 'api_error_status', None)}"
+                        f"  errors={getattr(message, 'errors', None)}"
+                        f"  cost_usd={getattr(message, 'total_cost_usd', None)}"
+                        f"  usage={getattr(message, 'usage', None)}"
+                        f"  num_turns={getattr(message, 'num_turns', None)}"
+                    )
 
         except ProcessError as exc:
-            log.debug("ProcessError caught", extra={
-                "error": str(exc),
-                "exit_code": getattr(exc, "exit_code", None),
-                "is_rate_limit": detection.is_rate_limited_text(str(exc)),
-                "last_assistant_text_preview": last_assistant_text[:200],
-            })
+            log.debug(
+                f"ProcessError  exit_code={getattr(exc, 'exit_code', None)}"
+                f"  is_rate_limit={detection.is_rate_limited_text(str(exc))}"
+                f"  error={exc!s}"
+                f"  last_text={last_assistant_text[:200]!r}"
+            )
             if detection.is_rate_limited_text(str(exc)) or detection.is_rate_limited_text(last_assistant_text):
                 reset_at = detection.parse_reset_time(last_assistant_text)
                 store.mark_limited(cred.id, reset_at=reset_at)
-                log.debug("Rate limit detected via ProcessError, rotating", extra={
-                    "cred_id": cred.id[:8],
-                    "reset_at": reset_at.isoformat() if reset_at else None,
-                })
+                log.debug(f"rate limit via ProcessError  cred={cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  → rotating")
                 sid = getattr(result_msg, "session_id", None) if result_msg else None
                 if sid:
                     store.update_session(sid, status="interrupted")
@@ -224,11 +201,7 @@ async def run(
                 if detection.is_rate_limited(result_msg, last_assistant_text):
                     reset_at = detection.parse_reset_time(last_assistant_text)
                     store.mark_limited(cred.id, reset_at=reset_at)
-                    log.debug("Rate limit detected via ResultMessage, rotating", extra={
-                        "cred_id": cred.id[:8],
-                        "reset_at": reset_at.isoformat() if reset_at else None,
-                        "api_error_status": getattr(result_msg, "api_error_status", None),
-                    })
+                    log.debug(f"rate limit via ResultMessage  cred={cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  api_error_status={getattr(result_msg, 'api_error_status', None)}  → rotating")
                     if sid:
                         store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                              output_tokens=output_tokens, status="interrupted")
@@ -239,21 +212,13 @@ async def run(
                         return 1
                     continue
                 else:
-                    log.debug("Non-rate-limit error result, returning exit 1", extra={
-                        "subtype": getattr(result_msg, "subtype", None),
-                        "errors": getattr(result_msg, "errors", None),
-                    })
+                    log.debug(f"non-rate-limit error  subtype={getattr(result_msg, 'subtype', None)}  errors={getattr(result_msg, 'errors', None)}  → exit 1")
                     if sid:
                         store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                              output_tokens=output_tokens, status="error")
                     return 1
             else:
-                log.debug("Successful result", extra={
-                    "session_id": sid,
-                    "cost_usd": cost,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                })
+                log.debug(f"success  session_id={sid}  cost_usd={cost}  input_tokens={input_tokens}  output_tokens={output_tokens}")
                 if sid:
                     store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                          output_tokens=output_tokens, status="success")
