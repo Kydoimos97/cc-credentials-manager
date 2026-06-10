@@ -107,7 +107,10 @@ async def run(
                 print("[cc-creds] No available credentials.", file=sys.stderr)
                 return 1
 
-        # Force-limit loop: keep rotating while the current cred is force-limited.
+        # Force-limit loop: skip creds whose CC_CREDS_FORCE_LIMIT_N var is set.
+        # Uses an in-memory skip set — does NOT write to the store, so the creds
+        # remain usable in future sessions once the env vars are cleared.
+        force_skipped: set[str] = set()
         while True:
             all_creds = store.list()
             cred_index = next(
@@ -115,12 +118,17 @@ async def run(
             )
             force_var = f"CC_CREDS_FORCE_LIMIT_{cred_index}"
             if cred_index and os.environ.get(force_var):
-                log.debug(f"force-limit  env_var={force_var}  cred={cred.id[:8]}  label={cred.label!r}  → rotating")
-                store.mark_limited(cred.id, reset_at=None)
-                cred = rotation.rotate(store)
-                if cred is None:
+                log.debug(f"force-limit (in-memory skip)  env_var={force_var}  cred={cred.id[:8]}")
+                force_skipped.add(cred.id)
+                next_cred = next(
+                    (c for c in all_creds if c.id not in force_skipped and store.is_available(c.id)),
+                    None,
+                )
+                if next_cred is None:
                     print("[cc-creds] All credentials exhausted (force-limit).", file=sys.stderr)
                     return 1
+                cred = next_cred
+                store.set_active(cred.id)
             else:
                 break
 

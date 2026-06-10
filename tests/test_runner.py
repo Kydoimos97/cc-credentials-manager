@@ -99,7 +99,8 @@ def test_force_limit_cred1_rotates_to_cred2(store, monkeypatch):
 
     assert exit_code == 0
     assert store.get_active().id == c2.id
-    assert not store.is_available(c1.id)
+    # c1 must still be available — force-limit is an in-memory skip, not a store write
+    assert store.is_available(c1.id)
 
 
 @pytest.mark.skipif(not _sdk_available(), reason="claude_agent_sdk not installed")

@@ -7,6 +7,15 @@ from cc_cred.store import CredStore
 from cc_cred.rotation import get_next_available, rotate
 
 
+@pytest.fixture(autouse=True)
+def no_fresh_check():
+    """Prevent _fresh_check from making real HTTP calls in unit tests.
+    rotate() passes recheck=True which would call check_token on unknown-status
+    credentials — fake tokens would always return invalid and break the tests."""
+    with patch("cc_cred.rotation._fresh_check", return_value=True):
+        yield
+
+
 @pytest.fixture
 def store(tmp_path):
     with patch.object(CredStore, "STORE_DIR", new=tmp_path / ".cc-creds"):
