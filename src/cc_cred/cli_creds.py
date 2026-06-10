@@ -289,11 +289,12 @@ def install_hook() -> None:
     settings_path = Path.home() / ".claude" / "settings.json"
 
     if not settings_path.exists():
-        err_console.print(f"[red]Settings file not found:[/] {settings_path}")
-        sys.exit(1)
-
-    with open(settings_path, "r") as f:
-        settings = json.load(f)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings = {}
+        console.print(f"[dim]~/.claude/settings.json not found — creating it.[/]")
+    else:
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
 
     hook_command = "cc-creds hook-event"
     hooks = settings.setdefault("hooks", {})
