@@ -170,8 +170,17 @@ def list_creds() -> None:
 @main.command()
 def status() -> None:
     """Show the currently active credential."""
+    from cc_cred._logging import get_logger, mask_token
+    log = get_logger()
+    debug_mode = bool(os.environ.get("CC_CREDS_DEBUG"))
+
     store = CredStore()
     active = store.get_active()
+
+    log.debug("status command", extra={
+        "active_id": active.id[:8] if active else None,
+        "active_label": active.label if active else None,
+    })
 
     if active is None:
         console.print("[yellow]No active credential set.[/]")
@@ -181,13 +190,24 @@ def status() -> None:
 
     cred_status = store.get_status(active.id)
 
-    if should_reverify(cred_status.last_checked):
+    log.debug("current cred status from store", extra={
+        "status": cred_status.status,
+        "reset_at": cred_status.reset_at,
+        "last_checked": cred_status.last_checked,
+        "last_error": cred_status.last_error,
+        "should_reverify": should_reverify(cred_status.last_checked),
+        "debug_mode_forces_reverify": debug_mode,
+    })
+
+    # In debug mode always re-verify so there's something visible to inspect.
+    if should_reverify(cred_status.last_checked) or debug_mode:
+        log.debug("calling check_token", extra={"token": mask_token(active.token)})
         with console.status("Checking token…"):
             new_status, err = check_token(active.token)
+        log.debug("check_token result", extra={"new_status": new_status, "error": err})
         now = datetime.now(timezone.utc).isoformat()
         status_dict = _load_status_dict(store)
         existing = status_dict.get(active.id, {})
-        # Only update if not currently rate-limited (don't overwrite a known limit)
         if cred_status.status not in ("limited", "admin_disabled"):
             status_dict[active.id] = {
                 "status": new_status,
@@ -244,7 +264,11 @@ def set_active(id_or_label: str) -> None:
 
 @main.command("install-hook")
 def install_hook() -> None:
-    """Add a StopFailure hook to ~/.claude/settings.json to track rate limits."""
+    """Add Stop and StopFailure hooks to ~/.claude/settings.json.
+
+    Stop     — records session cost/token usage against the active credential.
+    StopFailure — detects rate limits, rotates credential, and records usage.
+    """
     settings_path = Path.home() / ".claude" / "settings.json"
 
     if not settings_path.exists():
@@ -256,30 +280,43 @@ def install_hook() -> None:
 
     hook_command = "cc-creds hook-event"
     hooks = settings.setdefault("hooks", {})
-    stop_failure = hooks.setdefault("StopFailure", [])
+    installed: list[str] = []
+    already: list[str] = []
 
-    for entry in stop_failure:
-        for h in entry.get("hooks", []):
-            if h.get("command") == hook_command:
-                console.print("[dim]Hook already installed.[/]")
-                return
+    for event in ("Stop", "StopFailure"):
+        event_hooks = hooks.setdefault(event, [])
+        found = any(
+            h.get("command") == hook_command
+            for entry in event_hooks
+            for h in entry.get("hooks", [])
+        )
+        if found:
+            already.append(event)
+        else:
+            event_hooks.append({"hooks": [{"type": "command", "command": hook_command}]})
+            installed.append(event)
 
-    stop_failure.append({"hooks": [{"type": "command", "command": hook_command}]})
-
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
-
-    console.print(f"[green]Hook installed.[/] StopFailure → {hook_command}")
+    if installed:
+        with open(settings_path, "w") as f:
+            json.dump(settings, f, indent=2)
+        console.print(f"[green]Installed:[/] {', '.join(installed)} → {hook_command}")
+    if already:
+        console.print(f"[dim]Already installed:[/] {', '.join(already)}")
 
 
 @main.command("hook-event")
 def hook_event() -> None:
-    """Process a StopFailure hook event from stdin (called by Claude Code).
+    """Process Stop and StopFailure hook events from stdin (called by Claude Code).
 
-    Reads JSON payload from stdin. If error is 'rate_limit', marks the active
-    credential as limited and parses the reset time from last_assistant_message.
+    Stop         — reads session state (or transcript fallback) and records
+                   cost/token usage in sessions.jsonl against the active credential.
+    StopFailure  — same as Stop, plus detects rate_limit, marks the credential
+                   limited using resets_at from session state, and rotates.
     """
     from cc_cred.detection import parse_reset_time
+    from cc_cred.session_tracker import get_session_usage
+    from cc_cred._logging import get_logger
+    log = get_logger()
 
     try:
         raw = sys.stdin.read()
@@ -287,10 +324,21 @@ def hook_event() -> None:
     except (json.JSONDecodeError, Exception):
         sys.exit(0)
 
+    hook_type = data.get("hook_type", "")
     payload = data.get("payload", data)
+    session_id = payload.get("session_id")
+    transcript_path = payload.get("transcript_path")
+    cwd = payload.get("cwd", "")
     error = payload.get("error", "")
 
-    if error != "rate_limit":
+    log.debug("hook-event received", extra={
+        "hook_type": hook_type,
+        "session_id": session_id,
+        "error": error,
+        "has_transcript": bool(transcript_path),
+    })
+
+    if hook_type not in ("Stop", "StopFailure"):
         sys.exit(0)
 
     store = CredStore()
@@ -298,25 +346,68 @@ def hook_event() -> None:
     if active is None:
         sys.exit(0)
 
-    last_msg = payload.get("last_assistant_message", "")
-    reset_at = parse_reset_time(last_msg)
-    store.mark_limited(active.id, reset_at=reset_at)
+    # Fetch usage from session state file, falling back to transcript.
+    usage = get_session_usage(session_id, transcript_path) if session_id else None
 
-    # Rotate to next available credential and push it to settings.json
-    # so the next interactive claude session picks it up automatically.
-    next_cred = rotation.rotate(store)
+    log.debug("session usage resolved", extra={
+        "source": usage.source if usage else "none",
+        "cost_usd": usage.cost_usd if usage else None,
+        "input_tokens": usage.input_tokens if usage else None,
+        "output_tokens": usage.output_tokens if usage else None,
+    })
 
-    last_failure = store.STORE_DIR / "last-stop-failure.json"
-    record = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "session_id": payload.get("session_id"),
-        "token_id": active.id,
-        "rotated_to": next_cred.id if next_cred else None,
-        "reset_at": reset_at.isoformat() if reset_at else None,
-        "cwd": payload.get("cwd"),
-        "raw_message": last_msg,
-    }
-    with open(last_failure, "w") as f:
-        json.dump(record, f, indent=2)
+    # Record the session in sessions.jsonl if not already tracked (interactive sessions
+    # won't have been registered by the runner).
+    if session_id:
+        try:
+            store.register_session(session_id, active.id, cwd, "")
+        except Exception:
+            pass  # Already registered by runner — update_session below handles the rest.
+
+        if usage:
+            status_val = "error" if (hook_type == "StopFailure" and error != "rate_limit") else \
+                         "interrupted" if (hook_type == "StopFailure" and error == "rate_limit") else \
+                         "success"
+            store.update_session(
+                session_id,
+                cost_usd=usage.cost_usd,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                status=status_val,
+            )
+
+    # Rate limit handling (StopFailure only).
+    if hook_type == "StopFailure" and error == "rate_limit":
+        # Prefer resets_at from session state (clean Unix timestamp) over text parsing.
+        reset_at = None
+        if usage and usage.rate_limit_resets_at:
+            reset_at = usage.rate_limit_resets_at
+            log.debug("using resets_at from session state", extra={
+                "reset_at": reset_at.isoformat(),
+                "used_pct": usage.rate_limit_used_pct,
+            })
+        else:
+            last_msg = payload.get("last_assistant_message", "")
+            reset_at = parse_reset_time(last_msg)
+            log.debug("using resets_at from text parse", extra={
+                "reset_at": reset_at.isoformat() if reset_at else None,
+                "raw": last_msg[:100],
+            })
+
+        store.mark_limited(active.id, reset_at=reset_at)
+        next_cred = rotation.rotate(store)
+
+        last_failure = store.STORE_DIR / "last-stop-failure.json"
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_id": session_id,
+            "token_id": active.id,
+            "rotated_to": next_cred.id if next_cred else None,
+            "reset_at": reset_at.isoformat() if reset_at else None,
+            "cwd": cwd,
+            "raw_message": payload.get("last_assistant_message", ""),
+        }
+        with open(last_failure, "w") as f:
+            json.dump(record, f, indent=2)
 
     sys.exit(0)
