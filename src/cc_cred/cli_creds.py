@@ -369,6 +369,7 @@ def hook_event() -> None:
 
     active = session_cred or store.get_active()
     if active is None:
+        log.debug("hook-event: no active credential found, skipping session tracking")
         sys.exit(0)
 
     # Fetch usage from session state file, falling back to transcript.
@@ -387,6 +388,7 @@ def hook_event() -> None:
     if session_id:
         if not store.session_exists(session_id):
             store.register_session(session_id, active.id, cwd, "")
+            log.debug(f"hook-event: registered session  session_id={session_id[:8]}  cred={active.id[:8]}")
 
         if usage:
             if hook_type == "UserPromptSubmit":
