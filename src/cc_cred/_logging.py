@@ -30,7 +30,7 @@ def configure_logging() -> None:
     from logspark import logger, spark_log_manager
     from logspark.Handlers.Rich.SparkRichHandler import SparkRichHandler
 
-    if os.environ.get("CC_CREDS_DEBUG"):
+    if os.environ.get("CC_CREDS_DEBUG", "0") == "1":
         # force_terminal=True ensures output even when stderr is a pipe
         # (common in PowerShell subprocesses where isatty() returns False).
         console = Console(stderr=True, force_terminal=True)

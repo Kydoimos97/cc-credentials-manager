@@ -10,7 +10,20 @@ from typing import Optional
 
 from cc_cred._logging import fmt, get_logger
 
-SESSION_STATE_DIR = Path.home() / ".ccode" / "states" / "sessions"
+def _session_state_dir() -> Path:
+    """Return the session state directory.
+
+    Reads CCODE_HOME env var if set (Willem's ccode tooling), otherwise
+    falls back to ~/.ccode/states/sessions. When the directory doesn't
+    exist the session_tracker silently falls back to transcript parsing.
+    """
+    import os
+    ccode_home = os.environ.get("CCODE_HOME")
+    base = Path(ccode_home) if ccode_home else Path.home() / ".ccode"
+    return base / "states" / "sessions"
+
+
+SESSION_STATE_DIR = _session_state_dir()
 
 
 @dataclass
@@ -120,8 +133,16 @@ def parse_transcript(session_id: str, transcript_path: str) -> SessionUsage:
 def get_session_usage(
     session_id: str,
     transcript_path: Optional[str] = None,
+    allow_transcript_fallback: bool = False,
 ) -> SessionUsage:
-    """Get usage for a session — state file first, transcript fallback."""
+    """Get usage for a session.
+
+    State file (CCODE_HOME) is tried first when it exists.
+    Transcript fallback is only used when allow_transcript_fallback=True
+    (i.e. Stop/StopFailure — session is complete, transcript is final).
+    UserPromptSubmit passes allow_transcript_fallback=False so mid-session
+    hooks don't attempt expensive transcript parsing when no state file exists.
+    """
     log = get_logger()
     state = read_session_state(session_id)
     if state is not None:
@@ -138,7 +159,7 @@ def get_session_usage(
         )
         return usage
 
-    if transcript_path:
+    if allow_transcript_fallback and transcript_path:
         log.debug(f"state file missing, falling back to transcript  session_id={session_id}")
         return parse_transcript(session_id, transcript_path)
 

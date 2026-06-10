@@ -291,7 +291,7 @@ def install_hook() -> None:
     if not settings_path.exists():
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings = {}
-        console.print(f"[dim]~/.claude/settings.json not found — creating it.[/]")
+        console.print("[dim]~/.claude/settings.json not found — creating it.[/]")
     else:
         with open(settings_path, "r") as f:
             settings = json.load(f)
@@ -369,8 +369,11 @@ def hook_event() -> None:
         log.debug("hook-event: no active credential, skipping")
         sys.exit(0)
 
-    # Fetch usage from session state file, falling back to transcript.
-    usage = get_session_usage(session_id, transcript_path) if session_id else None
+    # State file (CCODE_HOME) used when available.
+    # Transcript fallback only on Stop/StopFailure — session is complete there.
+    # UserPromptSubmit skips transcript fallback (mid-session, incomplete data).
+    allow_transcript = hook_type in ("Stop", "StopFailure")
+    usage = get_session_usage(session_id, transcript_path, allow_transcript_fallback=allow_transcript) if session_id else None
 
     log.debug("session usage resolved", extra={
         "source": usage.source if usage else "none",

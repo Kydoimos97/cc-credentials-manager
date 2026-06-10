@@ -1,83 +1,148 @@
-# cc-cred
+# cc-credentials-manager
 
 Claude Code credential manager and autonomous runner. Manages multiple OAuth tokens
 across subscriptions, auto-rotates on rate limit, and tracks session usage.
 
+## Prerequisites
+
+- **Python 3.11+**
+- **uv** — https://docs.astral.sh/uv/getting-started/installation/
+- **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code` (the `claude` binary must be on PATH — the Agent SDK calls it as a subprocess)
+
 ## Install
 
 ```bash
-uv tool install /path/to/cc-cred
-# or from git:
-uv tool install git+https://github.com/YOUR_USER/cc-cred.git
+uv tool install git+https://github.com/Kydoimos97/cc-credentials-manager.git
 ```
 
-## Setup (new machine)
-
-**1. Generate a token for each Claude subscription:**
+Or from a local clone:
 
 ```bash
-claude auth login        # authenticate
-claude setup-token       # prints a sk-ant-oat... token valid for 1 year
+uv tool install /path/to/cc-credentials-manager
 ```
 
-**2. Register it:**
+This puts two binaries on PATH: `cc-creds` and `claude-auto`.
+
+## Setup
+
+**Step 1 — generate a long-lived token for each Claude subscription:**
 
 ```bash
-cc-creds add <token> --label "willem@wrench.ai"
+claude auth login       # authenticate with your Claude account
+claude setup-token      # prints a sk-ant-oat... token valid for 1 year
 ```
 
-Repeating for each account. The first credential added becomes active automatically.
+**Step 2 — register it:**
 
-**3. Install session tracking hooks:**
+```bash
+cc-creds add <token> --label "account-name"
+```
+
+The token is verified against the API immediately. The first credential added
+becomes active automatically.
+
+**Step 3 — install session tracking hooks:**
 
 ```bash
 cc-creds install-hook
 ```
 
 Registers `Stop`, `StopFailure`, and `UserPromptSubmit` hooks in
-`~/.claude/settings.json`. Creates the file if it doesn't exist.
+`~/.claude/settings.json`. Creates the file if it does not exist yet.
 
-**4. Done.** Start a new terminal so the token is in your environment, then use
-`claude` normally. All sessions are tracked in `~/.cc-creds/sessions.jsonl`.
+**Step 4 — open a new terminal.**
+
+`set-active` writes the token to the Windows user environment registry
+(`HKCU\Environment`) so Claude Code and all hook subprocesses inherit it.
+The new terminal picks up the updated environment.
+
+That's it. Use `claude` normally — all sessions are tracked automatically.
 
 ## Commands
 
-```
-cc-creds                        open the interactive TUI
-cc-creds add <token>            register a new credential
-cc-creds list                   list all credentials with live status
-cc-creds status                 show active credential (re-verifies)
-cc-creds status --label         print just the label, no API call (safe for scripts/hooks)
-cc-creds set-active <label>     switch active credential
-cc-creds rotate                 advance to next available credential
-cc-creds install-hook           register session tracking hooks
-```
+### Credential management
 
-## Autonomous runner
-
-```bash
-claude-auto "do something"             positional prompt
-claude-auto -p "do something"          flag prompt
-claude-auto -f prompt.txt              read prompt from file
-claude-auto --cwd /path/to/project     set working directory
-claude-auto --resume <session-id>      resume a specific session
+```
+cc-creds                              open the interactive TUI (Credentials + Stats tabs)
+cc-creds add <token> [--label NAME]   register and verify a new credential
+cc-creds list                         list all credentials with live API status
+cc-creds status                       show active credential, re-verify via API
+cc-creds status --label               print just the active label — no API call, safe in hooks/scripts
+cc-creds set-active <label-or-id>     switch active credential
+cc-creds rotate                       advance to next available credential
+cc-creds install-hook                 register session tracking hooks in ~/.claude/settings.json
 ```
 
-Automatically selects the active credential, rotates on rate limit, and resumes
-the session with the new token.
+### Autonomous runner
+
+```
+claude-auto "prompt"                  run a prompt non-interactively
+claude-auto -p "prompt"               same, -p flag for muscle memory
+claude-auto -f prompt.txt             read prompt from file
+claude-auto --cwd /path/to/project    set working directory (default: cwd)
+claude-auto --resume <session-id>     resume a specific session
+```
+
+Automatically picks the active credential, rotates on rate limit, and resumes
+the same session with the new token.
+
+## How it works
+
+### Credential store — `~/.cc-creds/`
+
+```
+credentials.json    registered tokens with labels and expiry
+cred-status.json    per-credential status: available / limited / admin_disabled
+active.key          currently active credential ID
+sessions.jsonl      session registry with cost and token data
+```
+
+### Token injection
+
+`set-active` and `rotate` write the token to three places simultaneously:
+1. `os.environ` — current process, immediate
+2. `HKCU\Environment` (Windows) — persists across terminals
+3. `~/.claude/settings.json` env block — read by Claude Code at startup
+
+### Session tracking
+
+Hooks registered by `install-hook` fire on every session:
+- `UserPromptSubmit` — registers the session, records rolling cost/token data
+- `Stop` — finalises status to `success`, records final cost/tokens
+- `StopFailure` — detects rate limits, rotates to next credential automatically
+
+Cost and token data comes from `$CCODE_HOME/states/sessions/` when that
+directory exists (requires the `CCODE_HOME` env var to be set). Otherwise
+the `Stop` hook parses the Claude transcript JSONL directly.
+
+### Rate limit rotation
+
+When a rate limit is hit mid-session, `claude-auto`:
+1. Catches the `RateLimitEvent` or `ProcessError` from the SDK
+2. Marks the current credential as limited with the exact reset time
+3. Rotates to the next available credential
+4. Resumes the same session with `ClaudeAgentOptions(resume=session_id)`
+
+Interactive `claude` sessions are handled by the `StopFailure` hook — Claude
+rotates the active credential and the next session starts with the fresh token.
 
 ## Testing rotation
 
 ```bash
-CC_CREDS_FORCE_LIMIT_1=1 claude-auto "hello"          skip cred 1, use cred 2
-CC_CREDS_FORCE_LIMIT_1=1 CC_CREDS_FORCE_LIMIT_2=1 claude-auto "hello"   exhaust all
+# Force-skip credential 1 (in-memory only, no store write):
+CC_CREDS_FORCE_LIMIT_1=1 claude-auto "hello"
+
+# Exhaust all credentials:
+CC_CREDS_FORCE_LIMIT_1=1 CC_CREDS_FORCE_LIMIT_2=1 claude-auto "hello"
 ```
 
-Force-limit is in-memory only — credentials are not marked limited in the store.
-
-## Debug
+## Debug logging
 
 ```bash
 CC_CREDS_DEBUG=1 cc-creds status
+CC_CREDS_DEBUG=1 cc-creds list
 CC_CREDS_DEBUG=1 claude-auto "hello"
 ```
+
+Outputs structured Rich logs to stderr: API calls with full response headers,
+SDK message stream, rotation decisions, session registration.
