@@ -23,7 +23,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
     log = get_logger()
     masked = mask_token(token)
 
-    log.debug("Verifying token", extra={
+    log.debug("check_token", extra={
         "token": masked,
         "url": VERIFY_URL,
         "timeout": VERIFY_TIMEOUT,
@@ -36,7 +36,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
             timeout=VERIFY_TIMEOUT,
         )
 
-        log.debug("Verification response received", extra={
+        log.debug("check_token response", extra={
             "token": masked,
             "status_code": resp.status_code,
             "response_headers": dict(resp.headers),
@@ -44,18 +44,18 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
         })
 
         if resp.status_code == 200:
-            log.debug("Token verified as available", extra={"token": masked})
+            log.debug("check_token → available", extra={"token": masked})
             return "available", None
 
         if resp.status_code in (401, 403):
-            log.debug("Token rejected by API", extra={
+            log.debug("check_token → rejected", extra={
                 "token": masked,
                 "status_code": resp.status_code,
                 "response_body": resp.text[:500],
             })
             return "invalid", f"API returned {resp.status_code}"
 
-        log.debug("Unexpected response status", extra={
+        log.debug("check_token → unexpected status", extra={
             "token": masked,
             "status_code": resp.status_code,
             "response_body": resp.text[:500],
@@ -63,7 +63,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
         return "unknown", f"Unexpected status {resp.status_code}"
 
     except httpx.TimeoutException as exc:
-        log.debug("Token verification timed out", extra={
+        log.debug("check_token timed out", extra={
             "token": masked,
             "url": VERIFY_URL,
             "error": str(exc),
@@ -71,7 +71,7 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
         return "unknown", "Request timed out"
 
     except httpx.RequestError as exc:
-        log.debug("Token verification request failed", extra={
+        log.debug("check_token request error", extra={
             "token": masked,
             "url": VERIFY_URL,
             "error": str(exc),

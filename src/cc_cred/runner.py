@@ -140,7 +140,7 @@ async def run(
             async for message in query(prompt=actual_prompt, options=options):
                 msg_type = getattr(message, "type", type(message).__name__)
                 msg_subtype = getattr(message, "subtype", None)
-                log.debug("SDK message received", extra={
+                log.debug("SDK message", extra={
                     "type": msg_type,
                     "subtype": msg_subtype,
                     "raw": repr(message)[:500],
