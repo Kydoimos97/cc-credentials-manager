@@ -12,7 +12,7 @@ from rich.table import Table
 from cc_cred._logging import configure_logging
 from cc_cred import rotation
 from cc_cred.store import CredStore, Credential
-from cc_cred.verify import check_token, should_reverify
+from cc_cred.verify import check_token
 
 console = Console()
 err_console = Console(stderr=True)
@@ -151,22 +151,20 @@ def list_creds() -> None:
         "unknown": "dim",
     }
 
-    stale = [c for c in creds if should_reverify(store.get_status(c.id).last_checked)]
-    if stale:
-        with console.status(f"Checking {len(stale)} credential(s)…"):
-            now = datetime.now(timezone.utc).isoformat()
-            status_dict = _load_status_dict(store)
-            for cred in stale:
-                new_status, err = check_token(cred.token)
-                existing = status_dict.get(cred.id, {})
-                if store.get_status(cred.id).status not in ("limited", "admin_disabled"):
-                    status_dict[cred.id] = {
-                        "status": new_status,
-                        "reset_at": existing.get("reset_at"),
-                        "last_checked": now,
-                        "last_error": err,
-                    }
-            store._save_status(status_dict)
+    with console.status(f"Checking {len(creds)} credential(s)…"):
+        now = datetime.now(timezone.utc).isoformat()
+        status_dict = _load_status_dict(store)
+        for cred in creds:
+            new_status, err = check_token(cred.token)
+            existing = status_dict.get(cred.id, {})
+            if store.get_status(cred.id).status not in ("limited", "admin_disabled"):
+                status_dict[cred.id] = {
+                    "status": new_status,
+                    "reset_at": existing.get("reset_at"),
+                    "last_checked": now,
+                    "last_error": err,
+                }
+        store._save_status(status_dict)
 
     for cred in creds:
         status = store.get_status(cred.id)
@@ -191,7 +189,6 @@ def status() -> None:
     """Show the currently active credential."""
     from cc_cred._logging import get_logger, mask_token
     log = get_logger()
-    debug_mode = os.environ.get("CC_CREDS_DEBUG", "0") == "1"
 
     store = CredStore()
     active = store.get_active()
@@ -209,33 +206,24 @@ def status() -> None:
 
     cred_status = store.get_status(active.id)
 
-    log.debug("current cred status from store", extra={
-        "status": cred_status.status,
-        "reset_at": cred_status.reset_at,
-        "last_checked": cred_status.last_checked,
-        "last_error": cred_status.last_error,
-        "should_reverify": should_reverify(cred_status.last_checked),
-        "debug_mode_forces_reverify": debug_mode,
-    })
+    log.debug(f"cached status  status={cred_status.status}  last_checked={cred_status.last_checked}")
 
-    # In debug mode always re-verify so there's something visible to inspect.
-    if should_reverify(cred_status.last_checked) or debug_mode:
-        log.debug("calling check_token", extra={"token": mask_token(active.token)})
-        with console.status("Checking token…"):
-            new_status, err = check_token(active.token)
-        log.debug("check_token result", extra={"new_status": new_status, "error": err})
-        now = datetime.now(timezone.utc).isoformat()
-        status_dict = _load_status_dict(store)
-        existing = status_dict.get(active.id, {})
-        if cred_status.status not in ("limited", "admin_disabled"):
-            status_dict[active.id] = {
-                "status": new_status,
-                "reset_at": existing.get("reset_at"),
-                "last_checked": now,
-                "last_error": err,
-            }
-            store._save_status(status_dict)
-            cred_status = store.get_status(active.id)
+    log.debug(f"calling check_token  token={mask_token(active.token)}")
+    with console.status("Checking token…"):
+        new_status, err = check_token(active.token)
+    log.debug(f"check_token result  new_status={new_status}  error={err}")
+    now = datetime.now(timezone.utc).isoformat()
+    status_dict = _load_status_dict(store)
+    existing = status_dict.get(active.id, {})
+    if cred_status.status not in ("limited", "admin_disabled"):
+        status_dict[active.id] = {
+            "status": new_status,
+            "reset_at": existing.get("reset_at"),
+            "last_checked": now,
+            "last_error": err,
+        }
+        store._save_status(status_dict)
+        cred_status = store.get_status(active.id)
 
     colour_map = {"available": "green", "limited": "yellow", "admin_disabled": "red", "unknown": "dim", "invalid": "red"}
     colour = colour_map.get(cred_status.status, "white")
