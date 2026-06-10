@@ -10,7 +10,7 @@ import os
 def configure_logging() -> None:
     """Call once at CLI entry point startup."""
     from logspark import logger, spark_log_manager
-    from logspark.Handlers.Rich import SparkRichHandler
+    from logspark.Handlers.Rich.SparkRichHandler import SparkRichHandler
 
     if os.environ.get("CC_CREDS_DEBUG"):
         logger.configure(level=logging.DEBUG, handler=SparkRichHandler())
