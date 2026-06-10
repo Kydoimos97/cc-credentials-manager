@@ -10,11 +10,15 @@ import os
 def configure_logging() -> None:
     """Call once at CLI entry point startup."""
     import sys
+    from rich.console import Console
     from logspark import logger, spark_log_manager
     from logspark.Handlers.Rich.SparkRichHandler import SparkRichHandler
 
     if os.environ.get("CC_CREDS_DEBUG"):
-        logger.configure(level=logging.DEBUG, handler=SparkRichHandler(stream=sys.stderr))
+        # force_terminal=True ensures output even when stderr is a pipe
+        # (common in PowerShell subprocesses where isatty() returns False).
+        console = Console(stderr=True, force_terminal=True)
+        logger.configure(level=logging.DEBUG, handler=SparkRichHandler(console=console))
         spark_log_manager.adopt_all()
         spark_log_manager.unify(copy_spark_logger_config=True, level=logging.WARNING)
     else:
