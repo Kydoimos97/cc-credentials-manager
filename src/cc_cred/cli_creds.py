@@ -250,11 +250,16 @@ def hook_event() -> None:
     reset_at = parse_reset_time(last_msg)
     store.mark_limited(active.id, reset_at=reset_at)
 
+    # Rotate to next available credential and push it to settings.json
+    # so the next interactive claude session picks it up automatically.
+    next_cred = rotation.rotate(store)
+
     last_failure = store.STORE_DIR / "last-stop-failure.json"
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "session_id": payload.get("session_id"),
         "token_id": active.id,
+        "rotated_to": next_cred.id if next_cred else None,
         "reset_at": reset_at.isoformat() if reset_at else None,
         "cwd": payload.get("cwd"),
         "raw_message": last_msg,

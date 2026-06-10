@@ -167,6 +167,32 @@ class CredStore:
 
         active_path = self._active_path()
         active_path.write_text(id)
+        self.sync_to_settings(cred)
+
+    def sync_to_settings(self, cred: "Credential") -> None:
+        """Write cred.token to ~/.claude/settings.json env.CLAUDE_CODE_OAUTH_TOKEN.
+
+        This ensures every claude invocation (interactive or SDK) uses the
+        currently active credential without any shell-level env var wrangling.
+        Silently does nothing if settings.json does not exist.
+        """
+        import json as _json
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if not settings_path.exists():
+            return
+
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = _json.load(f)
+
+            settings.setdefault("env", {})["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+
+            tmp_path = settings_path.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                _json.dump(settings, f, indent=2)
+            tmp_path.replace(settings_path)
+        except (OSError, ValueError):
+            pass
 
     def get_status(self, id: str) -> TokenStatus:
         status_dict = self._load_status()
