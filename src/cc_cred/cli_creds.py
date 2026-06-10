@@ -151,6 +151,23 @@ def list_creds() -> None:
         "unknown": "dim",
     }
 
+    stale = [c for c in creds if should_reverify(store.get_status(c.id).last_checked)]
+    if stale:
+        with console.status(f"Checking {len(stale)} credential(s)…"):
+            now = datetime.now(timezone.utc).isoformat()
+            status_dict = _load_status_dict(store)
+            for cred in stale:
+                new_status, err = check_token(cred.token)
+                existing = status_dict.get(cred.id, {})
+                if store.get_status(cred.id).status not in ("limited", "admin_disabled"):
+                    status_dict[cred.id] = {
+                        "status": new_status,
+                        "reset_at": existing.get("reset_at"),
+                        "last_checked": now,
+                        "last_error": err,
+                    }
+            store._save_status(status_dict)
+
     for cred in creds:
         status = store.get_status(cred.id)
         status_colour = colour_map.get(status.status, "white")
@@ -174,7 +191,7 @@ def status() -> None:
     """Show the currently active credential."""
     from cc_cred._logging import get_logger, mask_token
     log = get_logger()
-    debug_mode = bool(os.environ.get("CC_CREDS_DEBUG"))
+    debug_mode = os.environ.get("CC_CREDS_DEBUG", "0") == "1"
 
     store = CredStore()
     active = store.get_active()
