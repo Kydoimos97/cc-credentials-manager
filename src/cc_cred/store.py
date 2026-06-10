@@ -183,34 +183,52 @@ class CredStore:
         self.sync_to_settings(cred)
 
     def sync_to_settings(self, cred: "Credential") -> None:
-        """Write cred.token to ~/.claude/settings.json env.CLAUDE_CODE_OAUTH_TOKEN.
+        """Push the active token to every layer that matters:
 
-        This ensures every claude invocation (interactive or SDK) uses the
-        currently active credential without any shell-level env var wrangling.
-        Silently does nothing if settings.json does not exist.
+        1. os.environ — immediate effect in the current process and any
+           subprocesses it spawns from this point forward.
+        2. Windows user environment (HKCU\\Environment) — persists across
+           shells; Claude Code reads this at startup, so hooks it spawns
+           inherit CLAUDE_CODE_OAUTH_TOKEN and can identify the active cred.
+        3. ~/.claude/settings.json env block — read by Claude Code at startup
+           as a second path for the same value.
         """
         import json as _json
+        import os as _os
         from cc_cred._logging import mask_token
+
+        _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}")
+
+        # 1. Current process env — immediate.
+        _os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+
+        # 2. Windows user env — persists; inherited by all new processes.
+        if _os.name == "nt":
+            try:
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.SetValueEx(key, "CLAUDE_CODE_OAUTH_TOKEN", 0, winreg.REG_SZ, cred.token)
+                _log().debug("sync_to_settings: wrote to HKCU\\Environment")
+            except Exception as exc:
+                _log().debug(f"sync_to_settings: winreg write failed  error={exc}")
+
+        # 3. ~/.claude/settings.json env block.
         settings_path = Path.home() / ".claude" / "settings.json"
-
-        _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}  path={settings_path}  exists={settings_path.exists()}")
-
         if not settings_path.exists():
             return
-
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
                 settings = _json.load(f)
-
             settings.setdefault("env", {})["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
-
             tmp_path = settings_path.with_suffix(".tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 _json.dump(settings, f, indent=2)
             tmp_path.replace(settings_path)
-            _log().debug(f"sync_to_settings complete  path={settings_path}")
+            _log().debug(f"sync_to_settings: wrote settings.json  path={settings_path}")
         except (OSError, ValueError) as exc:
-            _log().debug(f"sync_to_settings failed  error={exc}")
+            _log().debug(f"sync_to_settings: settings.json write failed  error={exc}")
 
     def get_status(self, id: str) -> TokenStatus:
         status_dict = self._load_status()
