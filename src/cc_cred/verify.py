@@ -32,10 +32,9 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
             timeout=VERIFY_TIMEOUT,
         )
 
-        body_preview = resp.text[:2000] if resp.text else "(empty)"
         log.debug(
             f"check_token response  status={resp.status_code}"
-            + fmt({"headers": dict(resp.headers), "body": body_preview})
+            + fmt({"headers": dict(resp.headers), "body": resp.text}, show_body=resp.status_code != 200)
         )
 
         if resp.status_code == 200:
@@ -43,10 +42,10 @@ def check_token(token: str) -> tuple[str, Optional[str]]:
             return "available", None
 
         if resp.status_code in (401, 403):
-            log.debug(f"check_token → rejected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text[:500]}))
+            log.debug(f"check_token → rejected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text}))
             return "invalid", f"API returned {resp.status_code}"
 
-        log.debug(f"check_token → unexpected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text[:500]}))
+        log.debug(f"check_token → unexpected  token={masked}  status={resp.status_code}" + fmt({"body": resp.text}))
         return "unknown", f"Unexpected status {resp.status_code}"
 
     except httpx.TimeoutException as exc:

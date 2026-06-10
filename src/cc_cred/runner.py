@@ -128,7 +128,7 @@ async def run(
             async for message in query(prompt=actual_prompt, options=options):
                 msg_type = getattr(message, "type", type(message).__name__)
                 msg_subtype = getattr(message, "subtype", None)
-                log.debug(f"SDK ← {msg_type}/{msg_subtype}" + fmt(repr(message)[:2000]))
+                log.debug(f"SDK ← {msg_type}/{msg_subtype}" + fmt(repr(message)))
 
                 if _is_system_init(message):
                     sid = getattr(message, "data", {}).get("session_id")
