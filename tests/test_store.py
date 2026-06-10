@@ -1,12 +1,10 @@
 import json
-import tempfile
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from cc_cred.store import CredStore, Credential, TokenStatus, CredStats
+from cc_cred.store import CredStore, Credential
 
 
 @pytest.fixture

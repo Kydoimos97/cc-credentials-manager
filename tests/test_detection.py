@@ -1,6 +1,5 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
-import pytest
 
 from cc_cred.detection import parse_reset_time, is_rate_limited_text, is_rate_limited
 

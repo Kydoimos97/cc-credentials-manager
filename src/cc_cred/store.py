@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -170,7 +170,6 @@ class CredStore:
         if cred is None:
             raise KeyError(f"Credential {id} not found")
 
-        from cc_cred._logging import mask_token
         _log().debug("set_active", extra={"id": id[:8], "label": cred.label})
         active_path = self._active_path()
         active_path.write_text(id)

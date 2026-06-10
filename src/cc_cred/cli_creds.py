@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from cc_cred.store import CredStore, Credential
 from cc_cred.verify import check_token, should_reverify
 
 console = Console()
+err_console = Console(stderr=True)
 
 def _load_status_dict(store: CredStore) -> dict:
     """Return the raw status dict from cred-status.json."""
@@ -85,7 +87,7 @@ def add(token: Optional[str], label: str) -> None:
     try:
         cred = store.add(token, label)
     except ValueError as exc:
-        console.print(f"[red]Error:[/] {exc}", err=True)
+        err_console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)
 
     with console.status("Verifying token…"):
@@ -235,7 +237,7 @@ def rotate() -> None:
     store = CredStore()
     next_cred = rotation.rotate(store)
     if next_cred is None:
-        console.print("[red]No available credentials to rotate to.[/]", err=True)
+        err_console.print("[red]No available credentials to rotate to.[/]")
         sys.exit(1)
     label = next_cred.label or next_cred.id[:8]
     console.print(f"[green]Rotated to:[/] {label}")
@@ -255,7 +257,7 @@ def set_active(id_or_label: str) -> None:
             break
 
     if match is None:
-        console.print(f"[red]No credential matching[/] '{id_or_label}'", err=True)
+        err_console.print(f"[red]No credential matching[/] '{id_or_label}'")
         sys.exit(1)
 
     store.set_active(match.id)
@@ -272,7 +274,7 @@ def install_hook() -> None:
     settings_path = Path.home() / ".claude" / "settings.json"
 
     if not settings_path.exists():
-        console.print(f"[red]Settings file not found:[/] {settings_path}", err=True)
+        err_console.print(f"[red]Settings file not found:[/] {settings_path}")
         sys.exit(1)
 
     with open(settings_path, "r") as f:

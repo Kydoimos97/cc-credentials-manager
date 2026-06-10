@@ -35,7 +35,7 @@ def test_get_next_available_skips_exclude(store):
 
 def test_get_next_available_wraps_around(store):
     c1 = store.add("sk-ant-t1", "a")
-    c2 = store.add("sk-ant-t2", "b")
+    store.add("sk-ant-t2", "b")
     c3 = store.add("sk-ant-t3", "c")
     # Exclude c3 (last): should wrap to c1
     result = get_next_available(store, exclude_id=c3.id)

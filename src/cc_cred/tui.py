@@ -1,9 +1,10 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -17,7 +18,7 @@ from textual.widgets import (
     TabPane,
 )
 
-from cc_cred.store import CredStore, Credential
+from cc_cred.store import CredStore
 
 
 STATUS_COLOURS = {
@@ -144,7 +145,7 @@ class CredentialsTab(Container):
         table = self.query_one("#creds-table", DataTable)
         if table.cursor_row is None:
             return None
-        row_key, _ = table.coordinate_to_cell_key((table.cursor_row, 0))
+        row_key, _ = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
         return str(row_key.value) if row_key else None
 
     def action_add_key(self) -> None:

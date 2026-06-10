@@ -35,9 +35,13 @@ def parse_reset_time(text: str) -> Optional[datetime]:
 
     if ":" in time_str:
         m = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)", time_str)
+        if m is None:
+            return None
         hour, minute, period = int(m.group(1)), int(m.group(2)), m.group(3)
     else:
         m = re.match(r"(\d{1,2})\s*(am|pm)", time_str)
+        if m is None:
+            return None
         hour, minute, period = int(m.group(1)), 0, m.group(2)
 
     if period == "pm" and hour != 12:
