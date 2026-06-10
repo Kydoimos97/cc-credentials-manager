@@ -2,13 +2,14 @@
 name = "cc-cred"
 version = "0.1.0"
 description = "Claude credential manager and autonomous runner"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.0.1",
     "textual>=0.80.0",
     "click>=8.0.0",
     "rich>=13.0.0",
     "tzdata>=2024.1",
+    "logspark[color]>=0.10.1",
 ]
 
 [project.scripts]

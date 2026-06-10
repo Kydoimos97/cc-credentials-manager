@@ -4,6 +4,7 @@ from typing import Optional
 
 import click
 
+from cc_cred._logging import configure_logging
 from cc_cred.runner import run_sync
 
 
@@ -20,6 +21,7 @@ def main(
     cwd: Optional[str],
     session_id: Optional[str],
 ) -> None:
+    configure_logging()
     """Run a Claude agent session with automatic credential rotation.
 
     Prompt sources (first match wins):

@@ -8,6 +8,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from cc_cred._logging import configure_logging
 from cc_cred import rotation
 from cc_cred.store import CredStore, Credential
 from cc_cred.verify import check_token, should_reverify
@@ -62,6 +63,7 @@ def main(ctx: click.Context) -> None:
 
     Run without arguments to open the interactive TUI.
     """
+    configure_logging()
     if ctx.invoked_subcommand is None:
         from cc_cred.tui import CredManagerApp
         CredManagerApp().run()

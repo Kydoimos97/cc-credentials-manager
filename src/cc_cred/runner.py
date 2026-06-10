@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from cc_cred import detection, rotation
+from cc_cred._logging import get_logger, mask_token
 from cc_cred.store import CredStore
 
 try:
@@ -58,27 +59,48 @@ async def run(
         print("[cc-creds] claude_agent_sdk is not installed. Run: pip install claude-agent-sdk", file=sys.stderr)
         return 1
 
+    log = get_logger()
     store = CredStore()
-    max_attempts = max(len(store.list()) + 1, 1)
+    all_creds = store.list()
+    max_attempts = max(len(all_creds) + 1, 1)
     is_resume = session_id is not None
 
+    log.debug("Runner starting", extra={
+        "prompt_preview": prompt[:120],
+        "cwd": str(cwd),
+        "session_id": session_id,
+        "credential_count": len(all_creds),
+        "max_attempts": max_attempts,
+    })
+
     for attempt in range(max_attempts):
+        log.debug("Attempt starting", extra={"attempt": attempt})
+
         cred = store.get_active()
 
         if cred is None or not store.is_available(cred.id):
+            log.debug("Active credential unavailable, rotating", extra={
+                "active_id": cred.id[:8] if cred else None,
+                "status": store.get_status(cred.id).status if cred else "none",
+            })
             cred = rotation.rotate(store)
             if cred is None:
                 print("[cc-creds] No available credentials.", file=sys.stderr)
                 return 1
 
         # Force-limit loop: keep rotating while the current cred is force-limited.
-        # Supports CC_CREDS_FORCE_LIMIT_1, CC_CREDS_FORCE_LIMIT_2, etc.
         while True:
             all_creds = store.list()
             cred_index = next(
                 (i + 1 for i, c in enumerate(all_creds) if c.id == cred.id), None
             )
-            if cred_index and os.environ.get(f"CC_CREDS_FORCE_LIMIT_{cred_index}"):
+            force_var = f"CC_CREDS_FORCE_LIMIT_{cred_index}"
+            if cred_index and os.environ.get(force_var):
+                log.debug("Force-limit env var active, marking limited and rotating", extra={
+                    "env_var": force_var,
+                    "cred_id": cred.id[:8],
+                    "label": cred.label,
+                })
                 store.mark_limited(cred.id, reset_at=None)
                 cred = rotation.rotate(store)
                 if cred is None:
@@ -88,6 +110,16 @@ async def run(
                 break
 
         actual_prompt = RESUME_PROMPT if is_resume else prompt
+
+        log.debug("Invoking SDK query", extra={
+            "credential_id": cred.id[:8],
+            "credential_label": cred.label,
+            "token": mask_token(cred.token),
+            "is_resume": is_resume,
+            "resume_session_id": session_id,
+            "prompt_preview": actual_prompt[:120],
+            "cwd": str(cwd),
+        })
 
         options = ClaudeAgentOptions(
             env={"CLAUDE_CODE_OAUTH_TOKEN": cred.token},
@@ -101,6 +133,14 @@ async def run(
 
         try:
             async for message in query(prompt=actual_prompt, options=options):
+                msg_type = getattr(message, "type", type(message).__name__)
+                msg_subtype = getattr(message, "subtype", None)
+                log.debug("SDK message received", extra={
+                    "type": msg_type,
+                    "subtype": msg_subtype,
+                    "raw": repr(message)[:500],
+                })
+
                 if _is_system_init(message):
                     sid = getattr(message, "data", {}).get("session_id")
                     if sid and not registered:
@@ -112,6 +152,10 @@ async def run(
                             prompt[:100],
                         )
                         registered = True
+                        log.debug("Session registered", extra={
+                            "session_id": sid,
+                            "credential_id": cred.id[:8],
+                        })
 
                 elif _is_assistant(message):
                     for block in getattr(message, "content", []):
@@ -126,11 +170,31 @@ async def run(
                     sid = getattr(message, "session_id", None)
                     if sid:
                         session_id = sid
+                    log.debug("Result message received", extra={
+                        "session_id": sid,
+                        "is_error": getattr(message, "is_error", None),
+                        "subtype": getattr(message, "subtype", None),
+                        "api_error_status": getattr(message, "api_error_status", None),
+                        "errors": getattr(message, "errors", None),
+                        "total_cost_usd": getattr(message, "total_cost_usd", None),
+                        "usage": getattr(message, "usage", None),
+                        "num_turns": getattr(message, "num_turns", None),
+                    })
 
         except ProcessError as exc:
+            log.debug("ProcessError caught", extra={
+                "error": str(exc),
+                "exit_code": getattr(exc, "exit_code", None),
+                "is_rate_limit": detection.is_rate_limited_text(str(exc)),
+                "last_assistant_text_preview": last_assistant_text[:200],
+            })
             if detection.is_rate_limited_text(str(exc)) or detection.is_rate_limited_text(last_assistant_text):
                 reset_at = detection.parse_reset_time(last_assistant_text)
                 store.mark_limited(cred.id, reset_at=reset_at)
+                log.debug("Rate limit detected via ProcessError, rotating", extra={
+                    "cred_id": cred.id[:8],
+                    "reset_at": reset_at.isoformat() if reset_at else None,
+                })
                 sid = getattr(result_msg, "session_id", None) if result_msg else None
                 if sid:
                     store.update_session(sid, status="interrupted")
@@ -155,6 +219,11 @@ async def run(
                 if detection.is_rate_limited(result_msg, last_assistant_text):
                     reset_at = detection.parse_reset_time(last_assistant_text)
                     store.mark_limited(cred.id, reset_at=reset_at)
+                    log.debug("Rate limit detected via ResultMessage, rotating", extra={
+                        "cred_id": cred.id[:8],
+                        "reset_at": reset_at.isoformat() if reset_at else None,
+                        "api_error_status": getattr(result_msg, "api_error_status", None),
+                    })
                     if sid:
                         store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                              output_tokens=output_tokens, status="interrupted")
@@ -165,11 +234,21 @@ async def run(
                         return 1
                     continue
                 else:
+                    log.debug("Non-rate-limit error result, returning exit 1", extra={
+                        "subtype": getattr(result_msg, "subtype", None),
+                        "errors": getattr(result_msg, "errors", None),
+                    })
                     if sid:
                         store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                              output_tokens=output_tokens, status="error")
                     return 1
             else:
+                log.debug("Successful result", extra={
+                    "session_id": sid,
+                    "cost_usd": cost,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                })
                 if sid:
                     store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                          output_tokens=output_tokens, status="success")
