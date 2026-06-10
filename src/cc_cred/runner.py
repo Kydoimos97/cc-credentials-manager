@@ -117,7 +117,7 @@ async def run(
                 (i + 1 for i, c in enumerate(all_creds) if c.id == cred.id), None
             )
             force_var = f"CC_CREDS_FORCE_LIMIT_{cred_index}"
-            if cred_index and os.environ.get(force_var):
+            if cred_index and os.environ.get(force_var, "0") == "1":
                 log.debug(f"force-limit (in-memory skip)  env_var={force_var}  cred={cred.id[:8]}")
                 force_skipped.add(cred.id)
                 next_cred = next(
