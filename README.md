@@ -56,17 +56,11 @@ cc-creds install-hook
 Registers `Stop`, `StopFailure`, and `UserPromptSubmit` hooks in
 `~/.claude/settings.json`. Creates the file if it does not exist yet.
 
-**Step 4 — open a new terminal.**
-
-`set-active` writes the token to a persistent layer so new terminals pick it up:
-- **Windows** — `HKCU\Environment` registry key, inherited by all new shells automatically.
-- **macOS/Linux** — `~/.cc-creds/env` file. Add this to your `~/.bashrc` or `~/.zshrc` once:
-  ```bash
-  [ -f ~/.cc-creds/env ] && source ~/.cc-creds/env
-  ```
-  `cc-creds install-hook` will remind you of this if it hasn't been done.
-
 That's it. Use `claude` normally — all sessions are tracked automatically.
+
+The active credential is stored on disk in `~/.cc-creds/`. `claude-auto` reads it
+at startup and passes the token explicitly to each run — no global environment
+injection, so interactive `claude` sessions are never affected.
 
 ## Commands
 
@@ -122,10 +116,10 @@ sessions.jsonl      session registry with cost and token data
 
 ### Token injection
 
-`set-active` and `rotate` write the token to three places simultaneously:
-1. `os.environ` — current process, immediate
-2. Persistence layer — `HKCU\Environment` on Windows; `~/.cc-creds/env` on macOS/Linux
-3. `~/.claude/settings.json` env block — read by Claude Code at startup on all platforms
+The active credential lives in `~/.cc-creds/active.key`. `claude-auto` reads it
+at startup and passes the token explicitly via `ClaudeAgentOptions(env=...)` —
+it never touches `settings.json` or the shell environment globally, so interactive
+`claude` sessions always use your real OAuth session unchanged.
 
 ### Session tracking
 

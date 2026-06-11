@@ -211,105 +211,17 @@ class CredStore:
         _log().debug(f"set_active  id={id[:8]}  label={cred.label!r}")
         active_path = self._active_path()
         active_path.write_text(id)
+        self._scrub_settings_json_token()
         self.sync_to_settings(cred)
 
-    def _env_file_path(self) -> Path:
-        """~/.cc-creds/env — shell-sourceable export file for non-Windows persistence."""
-        return self.STORE_DIR / "env"
+    def _scrub_settings_json_token(self) -> None:
+        """Remove any CLAUDE_CODE_OAUTH_TOKEN from settings.json env block.
 
-    def sync_to_settings(self, cred: "Credential") -> None:
-        """Push the active token to every layer that matters:
-
-        1. os.environ — immediate effect in the current process and any
-           subprocesses it spawns from this point forward.
-        2. Persistence layer — platform-specific:
-             Windows: HKCU\\Environment registry key (inherited by all new shells)
-             Other:   ~/.cc-creds/env file (source it from .bashrc/.zshrc)
-        3. ~/.claude/settings.json env block — read by Claude Code at startup
-           on all platforms.
+        One-time migration: older versions of this tool wrote the token there,
+        which breaks interactive Claude Code sessions. Called on every set_active
+        so existing installs are cleaned up automatically.
         """
         import json as _json
-        import os as _os
-        from cc_cred._logging import mask_token
-
-        _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}")
-
-        # 1. Current process env — immediate.
-        _os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
-
-        # 2. Persistence layer.
-        if _os.name == "nt":
-            try:
-                import winreg
-                with winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
-                ) as key:
-                    winreg.SetValueEx(key, "CLAUDE_CODE_OAUTH_TOKEN", 0, winreg.REG_SZ, cred.token)
-                _log().debug("sync_to_settings: wrote to HKCU\\Environment")
-            except Exception as exc:
-                _log().debug(f"sync_to_settings: winreg write failed  error={exc}")
-        else:
-            try:
-                env_file = self._env_file_path()
-                env_file.write_text(f'export CLAUDE_CODE_OAUTH_TOKEN="{cred.token}"\n', encoding="utf-8")
-                _log().debug(f"sync_to_settings: wrote env file  path={env_file}")
-            except OSError as exc:
-                _log().debug(f"sync_to_settings: env file write failed  error={exc}")
-
-        # 3. ~/.claude/settings.json env block.
-        settings_path = Path.home() / ".claude" / "settings.json"
-        if not settings_path.exists():
-            return
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = _json.load(f)
-            settings.setdefault("env", {})["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
-            tmp_path = settings_path.with_suffix(".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                _json.dump(settings, f, indent=2)
-            tmp_path.replace(settings_path)
-            _log().debug(f"sync_to_settings: wrote settings.json  path={settings_path}")
-        except (OSError, ValueError) as exc:
-            _log().debug(f"sync_to_settings: settings.json write failed  error={exc}")
-
-    def _scrub_token_from_layers(self, token: str) -> None:
-        """Remove a token from os.environ, Windows registry, and settings.json."""
-        import os as _os
-        import json as _json
-        from cc_cred._logging import mask_token
-
-        _log().debug(f"_scrub_token_from_layers  token={mask_token(token)}")
-
-        # 1. Current process env
-        if _os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") == token:
-            del _os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
-
-        # 2. Persistence layer
-        if _os.name == "nt":
-            try:
-                import winreg
-                with winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
-                ) as key:
-                    try:
-                        current = winreg.QueryValueEx(key, "CLAUDE_CODE_OAUTH_TOKEN")[0]
-                        if current == token:
-                            winreg.DeleteValue(key, "CLAUDE_CODE_OAUTH_TOKEN")
-                            _log().debug("_scrub_token_from_layers: cleared HKCU\\Environment")
-                    except FileNotFoundError:
-                        pass
-            except Exception as exc:
-                _log().debug(f"_scrub_token_from_layers: winreg scrub failed  error={exc}")
-        else:
-            try:
-                env_file = self._env_file_path()
-                if env_file.exists():
-                    env_file.unlink()
-                    _log().debug(f"_scrub_token_from_layers: removed env file  path={env_file}")
-            except OSError as exc:
-                _log().debug(f"_scrub_token_from_layers: env file scrub failed  error={exc}")
-
-        # 3. ~/.claude/settings.json
         settings_path = Path.home() / ".claude" / "settings.json"
         if not settings_path.exists():
             return
@@ -317,7 +229,62 @@ class CredStore:
             with open(settings_path, "r", encoding="utf-8") as f:
                 settings = _json.load(f)
             env_block = settings.get("env", {})
-            if env_block.get("CLAUDE_CODE_OAUTH_TOKEN") == token:
+            if "CLAUDE_CODE_OAUTH_TOKEN" not in env_block:
+                return
+            del env_block["CLAUDE_CODE_OAUTH_TOKEN"]
+            if not env_block:
+                settings.pop("env", None)
+            else:
+                settings["env"] = env_block
+            tmp_path = settings_path.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                _json.dump(settings, f, indent=2)
+            tmp_path.replace(settings_path)
+            _log().debug(f"_scrub_settings_json_token: removed legacy token  path={settings_path}")
+        except (OSError, ValueError) as exc:
+            _log().debug(f"_scrub_settings_json_token: failed  error={exc}")
+
+    def sync_to_settings(self, cred: "Credential") -> None:
+        """Record the active credential in the current process environment only.
+
+        Intentionally does NOT write to settings.json or the Windows registry —
+        injecting a long-lived token into those layers breaks interactive Claude
+        Code sessions which rely on the real OAuth session. claude-auto passes the
+        token explicitly via ClaudeAgentOptions(env=...) and hooks read it from
+        disk via store.get_active(), so neither needs global env persistence.
+        """
+        import os as _os
+        from cc_cred._logging import mask_token
+
+        _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}")
+        _os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+
+    def _scrub_token_from_layers(self, token: str) -> None:
+        """Clear the active token from os.environ and any legacy persistence layers.
+
+        Also cleans up any CLAUDE_CODE_OAUTH_TOKEN entry in settings.json left
+        by older versions of this tool — those writes break interactive sessions
+        and should never have been there.
+        """
+        import os as _os
+        import json as _json
+        from cc_cred._logging import mask_token
+
+        _log().debug(f"_scrub_token_from_layers  token={mask_token(token)}")
+
+        # Current process env
+        if _os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") == token:
+            del _os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+        # Clean up any token written to settings.json by older versions of this tool
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if not settings_path.exists():
+            return
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = _json.load(f)
+            env_block = settings.get("env", {})
+            if "CLAUDE_CODE_OAUTH_TOKEN" in env_block:
                 del env_block["CLAUDE_CODE_OAUTH_TOKEN"]
                 if not env_block:
                     settings.pop("env", None)
@@ -327,7 +294,7 @@ class CredStore:
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     _json.dump(settings, f, indent=2)
                 tmp_path.replace(settings_path)
-                _log().debug("_scrub_token_from_layers: cleared settings.json")
+                _log().debug("_scrub_token_from_layers: removed legacy token from settings.json")
         except (OSError, ValueError) as exc:
             _log().debug(f"_scrub_token_from_layers: settings.json scrub failed  error={exc}")
 

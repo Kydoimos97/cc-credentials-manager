@@ -197,10 +197,22 @@ def list_creds() -> None:
 @main.command()
 @click.option("--label", "label_only", is_flag=True, default=False,
               help="Print only the active credential label. No API calls. Safe for use in hooks and scripts.")
-def status(label_only: bool) -> None:
-    """Show the currently active credential."""
+@click.option("--verify", "do_verify", is_flag=True, default=False,
+              help="Re-verify the token against the API and show full status.")
+@click.option("--json", "do_json", is_flag=True, default=False,
+              help="Output machine-readable JSON for scripts and statusline integration.")
+def status(label_only: bool, do_verify: bool, do_json: bool) -> None:
+    """Show active credential auth mode and label. No API calls by default."""
     store = CredStore()
     active = store.get_active()
+
+    if do_json:
+        import json as _json
+        if active is None:
+            print(_json.dumps({"mode": "OAuth2-Full", "label": None}))
+            return
+        print(_json.dumps({"mode": "LLT-Limited", "label": active.label or active.id[:8]}))
+        return
 
     if label_only:
         if active is None:
@@ -208,9 +220,18 @@ def status(label_only: bool) -> None:
         print(active.label or active.id[:8])
         return
 
+    if not do_verify:
+        # Lightweight default: machine-readable one-liner for statusline/scripts.
+        if active is None:
+            print("OAuth2-Full")
+            return
+        label = active.label or active.id[:8]
+        print(f"LLT-Limited: {label}")
+        return
+
+    # --verify: full API check with rich output (old default behavior)
     from cc_cred._logging import get_logger, mask_token
     log = get_logger()
-
 
     log.debug("status command", extra={
         "active_id": active.id[:8] if active else None,
@@ -318,16 +339,6 @@ def _install_hooks_impl() -> str:
             event_hooks.append({"hooks": [{"type": "command", "command": hook_command}]})
             installed.append(event)
 
-    import os as _os
-    env_note = ""
-    if _os.name != "nt":
-        env_file = Path.home() / ".cc-creds" / "env"
-        env_note = (
-            f"\n\nTo persist the active token across new terminals, add this line "
-            f"to your ~/.bashrc or ~/.zshrc:\n"
-            f"  [ -f {env_file} ] && source {env_file}"
-        )
-
     if installed:
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
@@ -335,10 +346,9 @@ def _install_hooks_impl() -> str:
             return (
                 "Hooks installed successfully. "
                 f"Already installed: {', '.join(already)}."
-                + env_note
             )
-        return "Hooks installed successfully." + env_note
-    return "Hooks already installed." + env_note
+        return "Hooks installed successfully."
+    return "Hooks already installed."
 
 
 @main.command("install-hook")
