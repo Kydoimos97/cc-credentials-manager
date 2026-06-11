@@ -245,19 +245,90 @@ class CredStore:
             _log().debug(f"_scrub_settings_json_token: failed  error={exc}")
 
     def sync_to_settings(self, cred: "Credential") -> None:
-        """Record the active credential in the current process environment only.
+        """Push the active token to os.environ and platform persistence.
 
-        Intentionally does NOT write to settings.json or the Windows registry —
-        injecting a long-lived token into those layers breaks interactive Claude
-        Code sessions which rely on the real OAuth session. claude-auto passes the
-        token explicitly via ClaudeAgentOptions(env=...) and hooks read it from
-        disk via store.get_active(), so neither needs global env persistence.
+        1. os.environ — immediate effect for the current process.
+        2. Platform persistence (for new terminals):
+             Windows: HKCU\\Environment registry key (winreg)
+             Other:   ~/.cc-creds/env file (source from .bashrc/.zshrc)
+
+        Does NOT touch settings.json — writing the token there breaks
+        interactive Claude Code sessions which rely on the real OAuth session.
         """
         import os as _os
         from cc_cred._logging import mask_token
 
         _log().debug(f"sync_to_settings  cred={cred.id[:8]}  label={cred.label!r}  token={mask_token(cred.token)}")
+
+        # 1. Current process env
         _os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+
+        # 2. Platform persistence
+        if _os.name == "nt":
+            try:
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.SetValueEx(key, "CLAUDE_CODE_OAUTH_TOKEN", 0, winreg.REG_SZ, cred.token)
+                _log().debug("sync_to_settings: wrote to HKCU\\Environment")
+            except Exception as exc:
+                _log().debug(f"sync_to_settings: winreg write failed  error={exc}")
+        else:
+            try:
+                env_file = self.STORE_DIR / "env"
+                env_file.write_text(f'export CLAUDE_CODE_OAUTH_TOKEN="{cred.token}"\n', encoding="utf-8")
+                _log().debug(f"sync_to_settings: wrote env file  path={env_file}")
+            except OSError as exc:
+                _log().debug(f"sync_to_settings: env file write failed  error={exc}")
+
+    def deactivate(self) -> None:
+        """Clear the active credential and remove the token from all persistence layers.
+
+        Removes CLAUDE_CODE_OAUTH_TOKEN from:
+        - os.environ (current process)
+        - HKCU\\Environment registry (Windows) or ~/.cc-creds/env file (other)
+        - settings.json env block (legacy cleanup)
+        - active.key (so get_active() returns None)
+        """
+        import os as _os
+        import json as _json
+
+        _log().debug("deactivate")
+
+        # Clear active.key
+        active_path = self._active_path()
+        if active_path.exists():
+            active_path.unlink()
+
+        # Current process env
+        _os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+
+        # Platform persistence
+        if _os.name == "nt":
+            try:
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    try:
+                        winreg.DeleteValue(key, "CLAUDE_CODE_OAUTH_TOKEN")
+                        _log().debug("deactivate: cleared HKCU\\Environment")
+                    except FileNotFoundError:
+                        pass
+            except Exception as exc:
+                _log().debug(f"deactivate: winreg clear failed  error={exc}")
+        else:
+            try:
+                env_file = self.STORE_DIR / "env"
+                if env_file.exists():
+                    env_file.unlink()
+                    _log().debug(f"deactivate: removed env file  path={env_file}")
+            except OSError as exc:
+                _log().debug(f"deactivate: env file clear failed  error={exc}")
+
+        # Legacy settings.json cleanup
+        self._scrub_settings_json_token()
 
     def _scrub_token_from_layers(self, token: str) -> None:
         """Clear the active token from os.environ and any legacy persistence layers.

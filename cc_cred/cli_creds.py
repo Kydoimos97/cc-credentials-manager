@@ -289,6 +289,24 @@ def rotate() -> None:
     console.print(f"[green]Rotated to:[/] {label}")
 
 
+@main.command()
+def deactivate() -> None:
+    """Remove active credential and return to your main OAuth session.
+
+    Clears CLAUDE_CODE_OAUTH_TOKEN from the user environment so interactive
+    claude sessions use the real OAuth session with full scope.
+    Open a new terminal after running this command.
+    """
+    store = CredStore()
+    active = store.get_active()
+    label = (active.label or active.id[:8]) if active else None
+    store.deactivate()
+    if label:
+        console.print(f"[green]Deactivated[/] {label}. Open a new terminal to use your OAuth session.")
+    else:
+        console.print("[yellow]No active credential was set.[/]")
+
+
 @main.command("set-active")
 @click.argument("id_or_label")
 def set_active(id_or_label: str) -> None:
