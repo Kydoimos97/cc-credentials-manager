@@ -6,12 +6,9 @@ from typing import Optional
 
 import click
 from rich.console import Console
-from rich.table import Table
 
 from cc_cred._logging import configure_logging
-from cc_cred import rotation
 from cc_cred.store import CredStore, Credential
-from cc_cred.verify import check_token
 
 console = Console()
 err_console = Console(stderr=True)
@@ -87,6 +84,8 @@ def add(token: Optional[str], label: str) -> None:
 
     If you don't have a token yet, run without arguments to see setup instructions.
     """
+    from cc_cred.verify import check_token
+
     if not token:
         console.print(SETUP_INSTRUCTIONS)
         return
@@ -133,6 +132,9 @@ def add(token: Optional[str], label: str) -> None:
 @main.command(name="list")
 def list_creds() -> None:
     """List all registered credentials and their status."""
+    from rich.table import Table
+    from cc_cred.verify import check_token
+
     store = CredStore()
     creds = store.list()
 
@@ -232,6 +234,7 @@ def status(label_only: bool, do_verify: bool, do_json: bool) -> None:
         return
 
     # --verify: full API check with rich output (old default behavior)
+    from cc_cred.verify import check_token
     from cc_cred._logging import get_logger, mask_token
     log = get_logger()
 
@@ -282,6 +285,8 @@ def status(label_only: bool, do_verify: bool, do_json: bool) -> None:
 @main.command()
 def rotate() -> None:
     """Manually rotate to the next available credential."""
+    from cc_cred import rotation
+
     store = CredStore()
     next_cred = rotation.rotate(store)
     if next_cred is None:
@@ -489,6 +494,7 @@ def hook_event() -> None:
 
         # Only mark as limited if we have an actual credential (not sentinel).
         if active is not None:
+            from cc_cred import rotation
             store.mark_limited(active.id, reset_at=reset_at)
             next_cred = rotation.rotate(store)
         else:

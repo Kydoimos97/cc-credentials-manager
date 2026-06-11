@@ -211,7 +211,6 @@ class CredStore:
         _log().debug(f"set_active  id={id[:8]}  label={cred.label!r}")
         active_path = self._active_path()
         active_path.write_text(id)
-        self._scrub_settings_json_token()
         self.sync_to_settings(cred)
 
     def _scrub_settings_json_token(self) -> None:
