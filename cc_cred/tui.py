@@ -20,6 +20,7 @@ from textual.widgets import (
 )
 
 from cc_cred.store import CredStore
+from cc_cred.cli_creds import OAUTH2_SENTINEL
 
 
 STATUS_COLOURS = {
@@ -250,6 +251,18 @@ class StatsTab(Container):
                 key=cred.id,
             )
 
+        # Also include OAuth2 sentinel session stats if there are any sessions.
+        oauth2_stats = self._store.get_stats(OAUTH2_SENTINEL)
+        if oauth2_stats.session_count > 0:
+            table.add_row(
+                "OAuth Session",
+                str(oauth2_stats.session_count),
+                f"${oauth2_stats.total_cost_usd:.4f}",
+                str(oauth2_stats.total_input_tokens),
+                str(oauth2_stats.total_output_tokens),
+                key=OAUTH2_SENTINEL,
+            )
+
 
 class UsageTab(ScrollableContainer):
     """Per-credential usage over the last 30 days (daily cost + tokens)."""
@@ -272,6 +285,24 @@ class UsageTab(ScrollableContainer):
             total_sessions = sum(d.sessions for d in daily)
             yield Label(
                 f"[bold]{label}[/bold]  —  {total_sessions} sessions  /  "
+                f"${total_cost:.4f} last 30 days",
+                classes="usage-cred-label",
+            )
+            yield Label("Daily cost (USD):", classes="usage-chart-label")
+            yield Sparkline(costs, summary_function=max, classes="usage-sparkline")
+            yield Label("Daily tokens:", classes="usage-chart-label")
+            yield Sparkline(tokens, summary_function=max, classes="usage-sparkline")
+            yield Static("", classes="usage-separator")
+
+        # Also render OAuth2 sentinel usage if there are sessions.
+        oauth2_daily = self._store.get_daily_usage(OAUTH2_SENTINEL, days=30)
+        oauth2_total_sessions = sum(d.sessions for d in oauth2_daily)
+        if oauth2_total_sessions > 0:
+            costs = [d.cost_usd for d in oauth2_daily]
+            tokens = [d.input_tokens + d.output_tokens for d in oauth2_daily]
+            total_cost = sum(costs)
+            yield Label(
+                f"[bold]OAuth Session[/bold]  —  {oauth2_total_sessions} sessions  /  "
                 f"${total_cost:.4f} last 30 days",
                 classes="usage-cred-label",
             )

@@ -70,10 +70,13 @@ injection, so interactive `claude` sessions are never affected.
 cc-creds                              open the interactive TUI (Credentials, Stats, Usage tabs)
 cc-creds add <token> [--label NAME]   register and verify a new credential
 cc-creds list                         list all credentials with live API status
-cc-creds status                       show active credential, re-verify via API
-cc-creds status --label               print just the active label — no API call, safe in hooks/scripts
+cc-creds status                       show auth mode and active label (no API call)
+cc-creds status --verify              re-verify token against API, show full status
+cc-creds status --json                machine-readable JSON output for scripts/statusline
+cc-creds status --label               print just the active label — safe for hooks/scripts
 cc-creds set-active <label-or-id>     switch active credential
 cc-creds remove <label-or-id>         remove a credential (scrubs token from registry and settings.json if active)
+cc-creds deactivate                   clear active credential, return to full OAuth session
 cc-creds rotate                       advance to next available credential
 cc-creds install-hook                 register session tracking hooks in ~/.claude/settings.json
 ```
@@ -110,16 +113,36 @@ the same session with the new token.
 ```
 credentials.json    registered tokens with labels and expiry
 cred-status.json    per-credential status: available / limited / admin_disabled
-active.key          currently active credential ID
+active.key          currently active credential ID (absent when deactivated)
 sessions.jsonl      session registry with cost and token data
+env                 shell env file written on non-Windows (source from .bashrc/.zshrc)
 ```
 
-### Token injection
+### Auth modes
 
-The active credential lives in `~/.cc-creds/active.key`. `claude-auto` reads it
-at startup and passes the token explicitly via `ClaudeAgentOptions(env=...)` —
-it never touches `settings.json` or the shell environment globally, so interactive
-`claude` sessions always use your real OAuth session unchanged.
+cc-creds supports two modes which can be switched at any time without restarting
+your session:
+
+**OAuth2-Full (default)** — `claude` uses your real OAuth session with full scope.
+Remote Control, billing, and all Claude Code features work normally. This is the
+default when no credential is active.
+
+**LLT-Limited** — a long-lived token is active. Claude Code uses that token for
+API calls, which means usage comes from the associated subscription quota. Some
+features that require the full OAuth session (e.g. Remote Control) are unavailable.
+
+Switch modes:
+```bash
+cc-creds set-active <label>   # activate an LLT — persists to user env vars
+cc-creds deactivate           # return to OAuth2-Full — clears user env vars
+```
+
+`set-active` writes the token to the Windows user environment (`HKCU\Environment`)
+so new terminals and Claude Code sessions inherit it. `deactivate` removes it.
+Neither touches `settings.json` — that would break interactive sessions.
+
+`claude-auto` always reads the active credential from disk and passes the token
+explicitly per run, regardless of what is in the shell environment.
 
 ### Session tracking
 
@@ -165,6 +188,15 @@ CC_CREDS_DEBUG=1 claude-auto "hello"
 
 Outputs structured Rich logs to stderr: API calls with full response headers,
 SDK message stream, rotation decisions, session registration.
+
+## Statusline integration
+
+If you use a Claude Code statusline script, `cc-creds status --json` returns:
+```json
+{"mode": "LLT-Limited", "label": "account-name"}
+{"mode": "OAuth2-Full", "label": null}
+```
+Use this to display the current auth mode in your statusline.
 
 ## Troubleshooting
 

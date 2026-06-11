@@ -16,6 +16,8 @@ from cc_cred.verify import check_token
 console = Console()
 err_console = Console(stderr=True)
 
+OAUTH2_SENTINEL = "__oauth2__"
+
 _STATUS_NORMALISE: dict[str, str] = {"invalid": "admin_disabled"}
 
 
@@ -422,9 +424,11 @@ def hook_event() -> None:
     # Claude Code filters sensitive vars from hook payloads. Use get_active()
     # directly: it reads active.key from disk and has no env var dependency.
     active = store.get_active()
-    if active is None:
-        log.debug("hook-event: no active credential, skipping")
-        sys.exit(0)
+    credential_id = active.id if active is not None else OAUTH2_SENTINEL
+    log.debug("hook-event processing", extra={
+        "active_id": active.id[:8] if active else None,
+        "credential_id": credential_id,
+    })
 
     # State file (CCODE_HOME) used when available.
     # Transcript fallback only on Stop/StopFailure — session is complete there.
@@ -444,8 +448,8 @@ def hook_event() -> None:
     # updating with rolling stats. Stop/StopFailure finalise with the terminal status.
     if session_id:
         if not store.session_exists(session_id):
-            store.register_session(session_id, active.id, cwd, "")
-            log.debug(f"hook-event: registered session  session_id={session_id[:8]}  cred={active.id[:8]}")
+            store.register_session(session_id, credential_id, cwd, "")
+            log.debug(f"hook-event: registered session  session_id={session_id[:8]}  cred={credential_id[:8]}")
 
         if usage:
             if hook_type == "UserPromptSubmit":
@@ -483,14 +487,19 @@ def hook_event() -> None:
                 "raw": last_msg[:100],
             })
 
-        store.mark_limited(active.id, reset_at=reset_at)
-        next_cred = rotation.rotate(store)
+        # Only mark as limited if we have an actual credential (not sentinel).
+        if active is not None:
+            store.mark_limited(active.id, reset_at=reset_at)
+            next_cred = rotation.rotate(store)
+        else:
+            next_cred = None
+            log.debug("rate_limit on OAuth2 session, no credential to mark")
 
         last_failure = store.STORE_DIR / "last-stop-failure.json"
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
-            "token_id": active.id,
+            "token_id": credential_id,
             "rotated_to": next_cred.id if next_cred else None,
             "reset_at": reset_at.isoformat() if reset_at else None,
             "cwd": cwd,
