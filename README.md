@@ -1,12 +1,13 @@
 # Credentials Manager for Claude Code
 
+[![CI](https://github.com/Kydoimos97/cc-credentials-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/Kydoimos97/cc-credentials-manager/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/cc-credentials-manager)](https://pypi.org/project/cc-credentials-manager/)
+[![Python](https://img.shields.io/pypi/pyversions/cc-credentials-manager)](https://pypi.org/project/cc-credentials-manager/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Manages multiple Claude Code OAuth tokens across subscriptions, auto-rotates on
 rate limit without losing session context, and tracks per-credential usage via
 hooks. Includes an interactive TUI and a drop-in autonomous runner (`claude-auto`).
-
-> **Platform note:** This tool is Windows-only. The token injection mechanism
-> relies on `winreg` (Windows registry). The install and usage commands shown
-> below use Windows paths and tooling.
 
 ## Prerequisites
 
@@ -17,13 +18,13 @@ hooks. Includes an interactive TUI and a drop-in autonomous runner (`claude-auto
 ## Install
 
 ```bash
-uv tool install git+https://github.com/Kydoimos97/cc-credentials-manager.git
+uv tool install cc-credentials-manager
 ```
 
-Or from a local clone:
+Or directly from GitHub:
 
 ```bash
-uv tool install /path/to/cc-credentials-manager
+uv tool install git+https://github.com/Kydoimos97/cc-credentials-manager.git
 ```
 
 This puts two binaries on PATH: `cc-creds` and `claude-auto`.
@@ -57,9 +58,13 @@ Registers `Stop`, `StopFailure`, and `UserPromptSubmit` hooks in
 
 **Step 4 — open a new terminal.**
 
-`set-active` writes the token to the Windows user environment registry
-(`HKCU\Environment`) so Claude Code and all hook subprocesses inherit it.
-The new terminal picks up the updated environment.
+`set-active` writes the token to a persistent layer so new terminals pick it up:
+- **Windows** — `HKCU\Environment` registry key, inherited by all new shells automatically.
+- **macOS/Linux** — `~/.cc-creds/env` file. Add this to your `~/.bashrc` or `~/.zshrc` once:
+  ```bash
+  [ -f ~/.cc-creds/env ] && source ~/.cc-creds/env
+  ```
+  `cc-creds install-hook` will remind you of this if it hasn't been done.
 
 That's it. Use `claude` normally — all sessions are tracked automatically.
 
@@ -119,8 +124,8 @@ sessions.jsonl      session registry with cost and token data
 
 `set-active` and `rotate` write the token to three places simultaneously:
 1. `os.environ` — current process, immediate
-2. `HKCU\Environment` (Windows) — persists across terminals
-3. `~/.claude/settings.json` env block — read by Claude Code at startup
+2. Persistence layer — `HKCU\Environment` on Windows; `~/.cc-creds/env` on macOS/Linux
+3. `~/.claude/settings.json` env block — read by Claude Code at startup on all platforms
 
 ### Session tracking
 

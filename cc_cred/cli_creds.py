@@ -318,6 +318,16 @@ def _install_hooks_impl() -> str:
             event_hooks.append({"hooks": [{"type": "command", "command": hook_command}]})
             installed.append(event)
 
+    import os as _os
+    env_note = ""
+    if _os.name != "nt":
+        env_file = Path.home() / ".cc-creds" / "env"
+        env_note = (
+            f"\n\nTo persist the active token across new terminals, add this line "
+            f"to your ~/.bashrc or ~/.zshrc:\n"
+            f"  [ -f {env_file} ] && source {env_file}"
+        )
+
     if installed:
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
@@ -325,9 +335,10 @@ def _install_hooks_impl() -> str:
             return (
                 "Hooks installed successfully. "
                 f"Already installed: {', '.join(already)}."
+                + env_note
             )
-        return "Hooks installed successfully."
-    return "Hooks already installed."
+        return "Hooks installed successfully." + env_note
+    return "Hooks already installed." + env_note
 
 
 @main.command("install-hook")

@@ -1,7 +1,7 @@
 [project]
-name = "cc-cred"
+name = "cc-credentials-manager"
 version = "0.1.0"
-description = "Claude credential manager and autonomous runner"
+description = "Credentials Manager for Claude Code — multi-token OAuth rotation and autonomous runner"
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.0.1",
@@ -20,6 +20,15 @@ Repository = "https://github.com/Kydoimos97/cc-credentials-manager"
 [project.scripts]
 claude-auto = "cc_cred.cli_auto:main"
 cc-creds    = "cc_cred.cli_creds:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["cc_cred"]
 
 [build-system]
 requires = ["hatchling"]
