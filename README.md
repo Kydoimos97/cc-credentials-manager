@@ -68,7 +68,7 @@ That's it. Use `claude` normally — all sessions are tracked automatically.
 ### Credential management
 
 ```
-cc-creds                              open the interactive TUI (Credentials + Stats tabs)
+cc-creds                              open the interactive TUI (Credentials, Stats, Usage tabs)
 cc-creds add <token> [--label NAME]   register and verify a new credential
 cc-creds list                         list all credentials with live API status
 cc-creds status                       show active credential, re-verify via API
@@ -77,6 +77,18 @@ cc-creds set-active <label-or-id>     switch active credential
 cc-creds remove <label-or-id>         remove a credential (scrubs token from registry and settings.json if active)
 cc-creds rotate                       advance to next available credential
 cc-creds install-hook                 register session tracking hooks in ~/.claude/settings.json
+```
+
+**TUI keybindings (Credentials tab):**
+
+```
+a       add new credential (opens token + label form)
+d       delete selected credential
+enter   set selected as active
+r       rotate to next available credential
+i       install session tracking hooks
+v       verify selected credential against the API
+q       quit
 ```
 
 ### Autonomous runner
