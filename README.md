@@ -1,7 +1,8 @@
-# cc-credentials-manager
+# Credentials Manager for Claude Code
 
-Claude Code credential manager and autonomous runner. Manages multiple OAuth tokens
-across subscriptions, auto-rotates on rate limit, and tracks session usage.
+Manages multiple Claude Code OAuth tokens across subscriptions, auto-rotates on
+rate limit without losing session context, and tracks per-credential usage via
+hooks. Includes an interactive TUI and a drop-in autonomous runner (`claude-auto`).
 
 > **Platform note:** This tool is Windows-only. The token injection mechanism
 > relies on `winreg` (Windows registry). The install and usage commands shown
