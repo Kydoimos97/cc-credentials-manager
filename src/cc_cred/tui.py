@@ -3,7 +3,7 @@ from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical
+from textual.containers import Container, ScrollableContainer, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -13,6 +13,7 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    Sparkline,
     Static,
     TabbedContent,
     TabPane,
@@ -104,6 +105,8 @@ class CredentialsTab(Container):
         Binding("d", "delete_key", "Delete"),
         Binding("enter", "set_active", "Set active"),
         Binding("r", "rotate", "Rotate"),
+        Binding("i", "install_hook", "Install hook"),
+        Binding("v", "verify_key", "Verify"),
     ]
 
     def __init__(self, store: CredStore) -> None:
@@ -191,6 +194,32 @@ class CredentialsTab(Container):
         else:
             self.query_one("#creds-status", Static).update("[red]No available credentials to rotate to.[/]")
 
+    def action_install_hook(self) -> None:
+        from cc_cred.cli_creds import _install_hooks_impl
+        result = _install_hooks_impl()
+        self.query_one("#creds-status", Static).update(f"[green]{result}[/]")
+
+    def action_verify_key(self) -> None:
+        cred_id = self._selected_cred_id()
+        if not cred_id:
+            return
+        from cc_cred.verify import check_token
+        cred = self._store.get(cred_id)
+        if cred is None:
+            return
+        self.query_one("#creds-status", Static).update("[dim]Verifying...[/]")
+        status, err = check_token(cred.token)
+        if status == "available":
+            self._store.mark_available(cred_id)
+            msg = "[green]Token verified — available.[/]"
+        elif status == "invalid":
+            self._store.mark_admin_disabled(cred_id, error=err)
+            msg = "[red]Token invalid (admin disabled).[/]"
+        else:
+            msg = f"[yellow]Verification failed: {err or 'network error'}[/]"
+        self._build_table()
+        self.query_one("#creds-status", Static).update(msg)
+
 
 class StatsTab(Container):
     """Per-credential usage stats from sessions.jsonl."""
@@ -222,6 +251,37 @@ class StatsTab(Container):
             )
 
 
+class UsageTab(ScrollableContainer):
+    """Per-credential usage over the last 30 days (daily cost + tokens)."""
+
+    def __init__(self, store: CredStore) -> None:
+        super().__init__()
+        self._store = store
+
+    def compose(self) -> ComposeResult:
+        creds = self._store.list()
+        if not creds:
+            yield Label("No credentials registered.", id="usage-empty")
+            return
+        for cred in creds:
+            label = cred.label or cred.id[:8]
+            daily = self._store.get_daily_usage(cred.id, days=30)
+            costs = [d.cost_usd for d in daily]
+            tokens = [d.input_tokens + d.output_tokens for d in daily]
+            total_cost = sum(costs)
+            total_sessions = sum(d.sessions for d in daily)
+            yield Label(
+                f"[bold]{label}[/bold]  —  {total_sessions} sessions  /  "
+                f"${total_cost:.4f} last 30 days",
+                classes="usage-cred-label",
+            )
+            yield Label("Daily cost (USD):", classes="usage-chart-label")
+            yield Sparkline(costs, summary_function=max, classes="usage-sparkline")
+            yield Label("Daily tokens:", classes="usage-chart-label")
+            yield Sparkline(tokens, summary_function=max, classes="usage-sparkline")
+            yield Static("", classes="usage-separator")
+
+
 class CredManagerApp(App):
     """cc-creds interactive credential manager."""
 
@@ -250,6 +310,21 @@ class CredManagerApp(App):
         height: 1;
         margin-top: 1;
     }
+    .usage-cred-label {
+        text-style: bold;
+        margin-top: 1;
+    }
+    .usage-chart-label {
+        color: $text-muted;
+        margin-top: 0;
+    }
+    .usage-sparkline {
+        height: 3;
+        margin-bottom: 0;
+    }
+    .usage-separator {
+        height: 1;
+    }
     """
 
     BINDINGS = [
@@ -267,9 +342,14 @@ class CredManagerApp(App):
                 yield CredentialsTab(self._store)
             with TabPane("Stats", id="stats-pane"):
                 yield StatsTab(self._store)
+            with TabPane("Usage", id="usage-pane"):
+                yield UsageTab(self._store)
         yield Footer()
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.tab.id == "stats-pane":
             stats_tab = self.query_one(StatsTab)
             stats_tab._build_table()
+        if event.tab.id == "usage-pane":
+            usage_tab = self.query_one(UsageTab)
+            usage_tab.refresh()

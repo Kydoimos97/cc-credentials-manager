@@ -16,6 +16,13 @@ from cc_cred.verify import check_token
 console = Console()
 err_console = Console(stderr=True)
 
+_STATUS_NORMALISE: dict[str, str] = {"invalid": "admin_disabled"}
+
+
+def _normalise_status(status: str) -> str:
+    return _STATUS_NORMALISE.get(status, status)
+
+
 def _load_status_dict(store: CredStore) -> dict:
     """Return the raw status dict from cred-status.json."""
     path = store._status_path()
@@ -92,11 +99,12 @@ def add(token: Optional[str], label: str) -> None:
     with console.status("Verifying token…"):
         status_val, err = check_token(token)
 
+    status_val = _normalise_status(status_val)
     now = datetime.now(timezone.utc).isoformat()
     store._save_status({
         **{k: v for k, v in _load_status_dict(store).items()},
         cred.id: {
-            "status": status_val if status_val != "invalid" else "admin_disabled",
+            "status": status_val,
             "reset_at": None,
             "last_checked": now,
             "last_error": err,
@@ -158,6 +166,7 @@ def list_creds() -> None:
             if new_status == "unknown":
                 # Network error — no verdict from the API, preserve existing status.
                 continue
+            new_status = _normalise_status(new_status)
             existing = status_dict.get(cred.id, {})
             status_dict[cred.id] = {
                 "status": new_status,
@@ -223,6 +232,7 @@ def status(label_only: bool) -> None:
         new_status, err = check_token(active.token)
     log.debug(f"check_token result  new_status={new_status}  error={err}")
     if new_status != "unknown":
+        new_status = _normalise_status(new_status)
         now = datetime.now(timezone.utc).isoformat()
         status_dict = _load_status_dict(store)
         existing = status_dict.get(active.id, {})
@@ -279,19 +289,13 @@ def set_active(id_or_label: str) -> None:
     console.print(f"[green]Active set to:[/] {match.id[:8]}" + (f" ({match.label})" if match.label else ""))
 
 
-@main.command("install-hook")
-def install_hook() -> None:
-    """Add Stop and StopFailure hooks to ~/.claude/settings.json.
-
-    Stop     — records session cost/token usage against the active credential.
-    StopFailure — detects rate limits, rotates credential, and records usage.
-    """
+def _install_hooks_impl() -> str:
+    """Install session tracking hooks. Returns a status message string."""
     settings_path = Path.home() / ".claude" / "settings.json"
 
     if not settings_path.exists():
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings = {}
-        console.print("[dim]~/.claude/settings.json not found — creating it.[/]")
     else:
         with open(settings_path, "r") as f:
             settings = json.load(f)
@@ -317,9 +321,23 @@ def install_hook() -> None:
     if installed:
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
-        console.print(f"[green]Installed:[/] {', '.join(installed)} → {hook_command}")
-    if already:
-        console.print(f"[dim]Already installed:[/] {', '.join(already)}")
+        if already:
+            return (
+                "Hooks installed successfully. "
+                f"Already installed: {', '.join(already)}."
+            )
+        return "Hooks installed successfully."
+    return "Hooks already installed."
+
+
+@main.command("install-hook")
+def install_hook() -> None:
+    """Add Stop and StopFailure hooks to ~/.claude/settings.json.
+
+    Stop     — records session cost/token usage against the active credential.
+    StopFailure — detects rate limits, rotates credential, and records usage.
+    """
+    click.echo(_install_hooks_impl())
 
 
 @main.command("hook-event")

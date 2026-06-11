@@ -3,6 +3,10 @@
 Claude Code credential manager and autonomous runner. Manages multiple OAuth tokens
 across subscriptions, auto-rotates on rate limit, and tracks session usage.
 
+> **Platform note:** This tool is Windows-only. The token injection mechanism
+> relies on `winreg` (Windows registry). The install and usage commands shown
+> below use Windows paths and tooling.
+
 ## Prerequisites
 
 - **Python 3.11+**
@@ -69,6 +73,7 @@ cc-creds list                         list all credentials with live API status
 cc-creds status                       show active credential, re-verify via API
 cc-creds status --label               print just the active label — no API call, safe in hooks/scripts
 cc-creds set-active <label-or-id>     switch active credential
+cc-creds remove <label-or-id>         remove a credential (scrubs token from registry and settings.json if active)
 cc-creds rotate                       advance to next available credential
 cc-creds install-hook                 register session tracking hooks in ~/.claude/settings.json
 ```
@@ -111,15 +116,17 @@ Hooks registered by `install-hook` fire on every session:
 - `Stop` — finalises status to `success`, records final cost/tokens
 - `StopFailure` — detects rate limits, rotates to next credential automatically
 
-Cost and token data comes from `$CCODE_HOME/states/sessions/` when that
-directory exists (requires the `CCODE_HOME` env var to be set). Otherwise
-the `Stop` hook parses the Claude transcript JSONL directly.
+Cost and token data comes from `$CCODE_HOME/states/sessions/` when the `CCODE_HOME`
+environment variable is set and points to your Claude Code data directory. Without
+it, the `Stop` hook falls back to parsing the Claude transcript JSONL directly —
+this path is less accurate and does not report rolling cost during active sessions
+(`UserPromptSubmit`). Set `CCODE_HOME` for reliable tracking.
 
 ### Rate limit rotation
 
 When a rate limit is hit mid-session, `claude-auto`:
 1. Catches the `RateLimitEvent` or `ProcessError` from the SDK
-2. Marks the current credential as limited with the exact reset time
+2. Marks the current credential as limited with the reset time when available (parsed from session state or assistant text; may be absent if not reported)
 3. Rotates to the next available credential
 4. Resumes the same session with `ClaudeAgentOptions(resume=session_id)`
 
@@ -146,3 +153,25 @@ CC_CREDS_DEBUG=1 claude-auto "hello"
 
 Outputs structured Rich logs to stderr: API calls with full response headers,
 SDK message stream, rotation decisions, session registration.
+
+## Troubleshooting
+
+**Hooks not firing or showing errors**
+
+Check that `cc-creds install-hook` ran successfully and that `~/.claude/settings.json`
+contains entries under `hooks.Stop`, `hooks.StopFailure`, and `hooks.UserPromptSubmit`.
+Hook payloads are JSON objects sent via stdin — the `hook-event` handler expects
+`session_id`, `type`, and `cwd` fields. If Claude Code changes its hook payload
+schema, the handler will silently skip unrecognised payloads.
+
+**`cc-creds list` shows "unknown" status after a network error**
+
+Status checks that fail due to network errors (timeout, DNS failure) are retried
+after 5 minutes. A credential in "unknown" state is treated as available for
+rotation — it will be re-verified the next time rotation tries to use it.
+
+**Credential removed but old token still active in a new terminal**
+
+`cc-creds remove` scrubs the token from `HKCU\Environment` and `settings.json`
+when the removed credential was active. Open a new terminal after removing an
+active credential to pick up the cleared environment.

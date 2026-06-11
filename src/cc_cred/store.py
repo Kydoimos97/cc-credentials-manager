@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 import json
 import uuid
+from filelock import FileLock
 
 TOKEN_LIFETIME_DAYS = 365
 
@@ -39,6 +42,15 @@ class CredStats:
     total_output_tokens: int
 
 
+@dataclass
+class DailyUsage:
+    date: str
+    sessions: int
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+
+
 def _cred_from_dict(c: dict) -> "Credential":
     """Hydrate a Credential from a stored dict, tolerating missing expires_at."""
     return Credential(
@@ -68,6 +80,15 @@ class CredStore:
     def _sessions_path(self) -> Path:
         return self.STORE_DIR / "sessions.jsonl"
 
+    def _credentials_lock(self) -> FileLock:
+        return FileLock(str(self._credentials_path()) + ".lock")
+
+    def _status_lock(self) -> FileLock:
+        return FileLock(str(self._status_path()) + ".lock")
+
+    def _sessions_lock(self) -> FileLock:
+        return FileLock(str(self._sessions_path()) + ".lock")
+
     def _load_credentials(self) -> list[dict]:
         path = self._credentials_path()
         if not path.exists():
@@ -93,25 +114,26 @@ class CredStore:
             json.dump(status, f, indent=2)
 
     def add(self, token: str, label: str = "") -> Credential:
-        creds = self._load_credentials()
-        for cred in creds:
-            if cred["token"] == token:
-                raise ValueError("Token already registered")
+        with self._credentials_lock():
+            creds = self._load_credentials()
+            for cred in creds:
+                if cred["token"] == token:
+                    raise ValueError("Token already registered")
 
-        cred_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
-        now_str = now.isoformat()
-        expires_str = (now + timedelta(days=TOKEN_LIFETIME_DAYS)).isoformat()
+            cred_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
+            now_str = now.isoformat()
+            expires_str = (now + timedelta(days=TOKEN_LIFETIME_DAYS)).isoformat()
 
-        new_cred = {
-            "id": cred_id,
-            "token": token,
-            "label": label,
-            "added_at": now_str,
-            "expires_at": expires_str,
-        }
-        creds.append(new_cred)
-        self._save_credentials(creds)
+            new_cred = {
+                "id": cred_id,
+                "token": token,
+                "label": label,
+                "added_at": now_str,
+                "expires_at": expires_str,
+            }
+            creds.append(new_cred)
+            self._save_credentials(creds)
 
         return Credential(
             id=cred_id,
@@ -127,9 +149,11 @@ class CredStore:
 
     def remove(self, id: str) -> None:
         creds = self._load_credentials()
+        removed_cred = None
         found = False
         for i, cred in enumerate(creds):
             if cred["id"] == id:
+                removed_cred = _cred_from_dict(cred)
                 del creds[i]
                 found = True
                 break
@@ -137,18 +161,25 @@ class CredStore:
         if not found:
             raise KeyError(f"Credential {id} not found")
 
-        self._save_credentials(creds)
+        with self._credentials_lock():
+            self._save_credentials(creds)
 
-        status = self._load_status()
-        if id in status:
-            del status[id]
-            self._save_status(status)
+        with self._status_lock():
+            status = self._load_status()
+            if id in status:
+                del status[id]
+                self._save_status(status)
 
         active_path = self._active_path()
+        was_active = False
         if active_path.exists():
             active_id = active_path.read_text().strip()
             if active_id == id:
                 active_path.unlink()
+                was_active = True
+
+        if was_active and removed_cred is not None:
+            self._scrub_token_from_layers(removed_cred.token)
 
     def get(self, id: str) -> Optional[Credential]:
         creds = self._load_credentials()
@@ -230,6 +261,57 @@ class CredStore:
         except (OSError, ValueError) as exc:
             _log().debug(f"sync_to_settings: settings.json write failed  error={exc}")
 
+    def _scrub_token_from_layers(self, token: str) -> None:
+        """Remove a token from os.environ, Windows registry, and settings.json."""
+        import os as _os
+        import json as _json
+        from cc_cred._logging import mask_token
+
+        _log().debug(f"_scrub_token_from_layers  token={mask_token(token)}")
+
+        # 1. Current process env
+        if _os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") == token:
+            del _os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+        # 2. Windows user env
+        if _os.name == "nt":
+            try:
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    try:
+                        current = winreg.QueryValueEx(key, "CLAUDE_CODE_OAUTH_TOKEN")[0]
+                        if current == token:
+                            winreg.DeleteValue(key, "CLAUDE_CODE_OAUTH_TOKEN")
+                            _log().debug("_scrub_token_from_layers: cleared HKCU\\Environment")
+                    except FileNotFoundError:
+                        pass
+            except Exception as exc:
+                _log().debug(f"_scrub_token_from_layers: winreg scrub failed  error={exc}")
+
+        # 3. ~/.claude/settings.json
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if not settings_path.exists():
+            return
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = _json.load(f)
+            env_block = settings.get("env", {})
+            if env_block.get("CLAUDE_CODE_OAUTH_TOKEN") == token:
+                del env_block["CLAUDE_CODE_OAUTH_TOKEN"]
+                if not env_block:
+                    settings.pop("env", None)
+                else:
+                    settings["env"] = env_block
+                tmp_path = settings_path.with_suffix(".tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    _json.dump(settings, f, indent=2)
+                tmp_path.replace(settings_path)
+                _log().debug("_scrub_token_from_layers: cleared settings.json")
+        except (OSError, ValueError) as exc:
+            _log().debug(f"_scrub_token_from_layers: settings.json scrub failed  error={exc}")
+
     def get_status(self, id: str) -> TokenStatus:
         status_dict = self._load_status()
         if id not in status_dict:
@@ -265,33 +347,62 @@ class CredStore:
 
             return False
 
-        return True
+        return False
 
     def mark_limited(self, id: str, reset_at: Optional[datetime] = None) -> None:
         _log().debug(f"mark_limited  id={id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}")
-        status_dict = self._load_status()
-        reset_str = None
-        if reset_at is not None:
-            reset_str = reset_at.isoformat()
+        with self._status_lock():
+            status_dict = self._load_status()
+            reset_str = None
+            if reset_at is not None:
+                reset_str = reset_at.isoformat()
 
-        status_dict[id] = {
-            "status": "limited",
-            "reset_at": reset_str,
-            "last_checked": datetime.now(timezone.utc).isoformat(),
-            "last_error": None,
-        }
-        self._save_status(status_dict)
+            status_dict[id] = {
+                "status": "limited",
+                "reset_at": reset_str,
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "last_error": None,
+            }
+            self._save_status(status_dict)
 
     def mark_available(self, id: str) -> None:
         _log().debug(f"mark_available  id={id[:8]}")
-        status_dict = self._load_status()
-        status_dict[id] = {
-            "status": "available",
-            "reset_at": None,
-            "last_checked": datetime.now(timezone.utc).isoformat(),
-            "last_error": None,
-        }
-        self._save_status(status_dict)
+        with self._status_lock():
+            status_dict = self._load_status()
+            status_dict[id] = {
+                "status": "available",
+                "reset_at": None,
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "last_error": None,
+            }
+            self._save_status(status_dict)
+
+    def mark_admin_disabled(self, id: str, error: Optional[str] = None) -> None:
+        _log().debug(f"mark_admin_disabled  id={id[:8]}  error={error}")
+        with self._status_lock():
+            status_dict = self._load_status()
+            status_dict[id] = {
+                "status": "admin_disabled",
+                "reset_at": None,
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "last_error": error,
+            }
+            self._save_status(status_dict)
+
+    def mark_network_failure(self, id: str, error: str) -> None:
+        """Stamp last_checked on a network check failure without changing status.
+        Used by rotation._fresh_check() so _needs_fresh_check() can gate on recency."""
+        _log().debug(f"mark_network_failure  id={id[:8]}  error={error}")
+        with self._status_lock():
+            status_dict = self._load_status()
+            current = status_dict.get(id, {})
+            status_dict[id] = {
+                "status": current.get("status", "unknown"),
+                "reset_at": current.get("reset_at"),
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "last_error": error,
+            }
+            self._save_status(status_dict)
 
     def register_session(
         self,
@@ -315,8 +426,9 @@ class CredStore:
             "status": "running",
         }
 
-        with open(sessions_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
+        with self._sessions_lock():
+            with open(sessions_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
 
     def session_exists(self, session_id: str) -> bool:
         """Return True if session_id already has a record in sessions.jsonl."""
@@ -345,32 +457,33 @@ class CredStore:
         if not sessions_path.exists():
             return
 
-        with open(sessions_path, "r") as f:
-            lines = f.readlines()
+        with self._sessions_lock():
+            with open(sessions_path, "r") as f:
+                lines = f.readlines()
 
-        matching_idx = None
-        for i in range(len(lines) - 1, -1, -1):
-            record = json.loads(lines[i])
-            if record.get("session_id") == session_id:
-                matching_idx = i
-                break
+            matching_idx = None
+            for i in range(len(lines) - 1, -1, -1):
+                record = json.loads(lines[i])
+                if record.get("session_id") == session_id:
+                    matching_idx = i
+                    break
 
-        if matching_idx is None:
-            return
+            if matching_idx is None:
+                return
 
-        record = json.loads(lines[matching_idx])
-        if cost_usd is not None:
-            record["cost_usd"] = cost_usd
-        if input_tokens is not None:
-            record["input_tokens"] = input_tokens
-        if output_tokens is not None:
-            record["output_tokens"] = output_tokens
-        record["status"] = status
+            record = json.loads(lines[matching_idx])
+            if cost_usd is not None:
+                record["cost_usd"] = cost_usd
+            if input_tokens is not None:
+                record["input_tokens"] = input_tokens
+            if output_tokens is not None:
+                record["output_tokens"] = output_tokens
+            record["status"] = status
 
-        lines[matching_idx] = json.dumps(record) + "\n"
+            lines[matching_idx] = json.dumps(record) + "\n"
 
-        with open(sessions_path, "w") as f:
-            f.writelines(lines)
+            with open(sessions_path, "w") as f:
+                f.writelines(lines)
 
     def get_stats(self, credential_id: str) -> CredStats:
         sessions_path = self._sessions_path()
@@ -410,3 +523,59 @@ class CredStore:
             total_input_tokens=total_input,
             total_output_tokens=total_output,
         )
+
+    def get_daily_usage(self, credential_id: str, days: int = 30) -> list["DailyUsage"]:
+        """Return per-day usage aggregates for the last `days` calendar days.
+
+        Days with no sessions are included as zero-value entries so the
+        caller gets a consistent-length sequence suitable for a sparkline chart.
+        """
+        from datetime import date, timedelta
+
+        sessions_path = self._sessions_path()
+        today = date.today()
+        # Build a dict of date -> DailyUsage for the window
+        window: dict[str, DailyUsage] = {}
+        for i in range(days):
+            d = (today - timedelta(days=days - 1 - i)).isoformat()
+            window[d] = DailyUsage(
+                date=d,
+                sessions=0,
+                cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+            )
+
+        if not sessions_path.exists():
+            return list(window.values())
+
+        with open(sessions_path, "r") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("credential_id") != credential_id:
+                    continue
+                started = record.get("started_at", "")
+                if not started:
+                    continue
+                try:
+                    day_str = started[:10]  # "YYYY-MM-DD"
+                except Exception:
+                    continue
+                if day_str not in window:
+                    continue
+                entry = window[day_str]
+                entry.sessions += 1
+                cost = record.get("cost_usd")
+                if cost is not None:
+                    entry.cost_usd += cost
+                inp = record.get("input_tokens")
+                if inp is not None:
+                    entry.input_tokens += inp
+                out = record.get("output_tokens")
+                if out is not None:
+                    entry.output_tokens += out
+
+        return list(window.values())

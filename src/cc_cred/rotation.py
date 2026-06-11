@@ -1,16 +1,17 @@
 from cc_cred._logging import fmt, get_logger
 from cc_cred.store import CredStore, Credential
 from typing import Optional
+from datetime import datetime, timezone
+
+NETWORK_FAILURE_RETRY_SECS = 300
 
 
 def _fresh_check(store: CredStore, cred: Credential) -> bool:
     """Re-verify a credential via the API and update the store.
 
-    Called when the stored status is stale (limited with no reset_at, or unknown)
-    so that force-limit test runs and genuinely expired limits both recover
-    automatically on the next rotation without manual intervention.
-
     Returns True if the fresh check says the token is available.
+    On network failure, stamps last_checked so _needs_fresh_check()
+    can apply a retry TTL and avoid hammering the API.
     """
     from cc_cred.verify import check_token
     log = get_logger()
@@ -20,40 +21,26 @@ def _fresh_check(store: CredStore, cred: Credential) -> bool:
         store.mark_available(cred.id)
         return True
     if status == "invalid":
-        store._save_status({
-            **_load_status_raw(store),
-            cred.id: {"status": "admin_disabled", "reset_at": None,
-                      "last_checked": _now(), "last_error": err},
-        })
+        store.mark_admin_disabled(cred.id, error=err)
+        return False
+    store.mark_network_failure(cred.id, error=err or "Network check failed")
     return False
 
 
-def _load_status_raw(store: CredStore) -> dict:
-    import json
-    path = store._status_path()
-    if not path.exists():
-        return {}
-    with open(path) as f:
-        return json.load(f)
-
-
-def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _needs_fresh_check(store: CredStore, cred_id: str) -> bool:
-    """Return True if the credential's status warrants an API re-verify.
-
-    Triggers on:
-    - 'unknown'  — never verified
-    - 'limited' with reset_at=None — bricked indefinitely (force-limit artefact
-      or a rate-limit whose reset time was never recorded)
-    """
+    """Return True if the credential's status warrants an API re-verify."""
     status = store.get_status(cred_id)
     if status.status == "unknown":
+        if status.last_checked:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(status.last_checked)).total_seconds()
+            if age < NETWORK_FAILURE_RETRY_SECS:
+                return False
         return True
     if status.status == "limited" and status.reset_at is None:
+        if status.last_checked:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(status.last_checked)).total_seconds()
+            if age < NETWORK_FAILURE_RETRY_SECS:
+                return False
         return True
     return False
 

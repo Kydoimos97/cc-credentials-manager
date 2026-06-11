@@ -156,6 +156,9 @@ async def run(
         last_assistant_text = ""
         registered = False
 
+        attempt_cred = cred  # immutable for this attempt; rotation happens after stream ends
+        _rl_fired = False
+
         try:
             async for message in query(prompt=actual_prompt, options=options):
                 msg_type = getattr(message, "type", type(message).__name__)
@@ -197,13 +200,10 @@ async def run(
                             if rl_resets_at else None
                         )
                         log.debug(f"rate limit active via RateLimitEvent  rotating  reset_at={reset_dt}")
-                        store.mark_limited(cred.id, reset_at=reset_dt)
+                        store.mark_limited(attempt_cred.id, reset_at=reset_dt)
                         is_resume = session_id is not None
-                        cred = rotation.rotate(store)
-                        if cred is None:
-                            print("[cc-creds] All credentials exhausted (rate limit event).", file=sys.stderr)
-                            return 1
-                        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = cred.token
+                        _rl_fired = True
+                        break
 
                 elif _is_result(message):
                     result_msg = message
@@ -240,8 +240,8 @@ async def run(
             )
             if detection.is_rate_limited_text(str(exc)) or detection.is_rate_limited_text(last_assistant_text):
                 reset_at = detection.parse_reset_time(last_assistant_text)
-                store.mark_limited(cred.id, reset_at=reset_at)
-                log.debug(f"rate limit via ProcessError  cred={cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  → rotating")
+                store.mark_limited(attempt_cred.id, reset_at=reset_at)
+                log.debug(f"rate limit via ProcessError  cred={attempt_cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  → rotating")
                 sid = getattr(result_msg, "session_id", None) if result_msg else None
                 if sid:
                     store.update_session(sid, status="interrupted")
@@ -254,6 +254,13 @@ async def run(
             print(f"[cc-creds] Process error: {exc}", file=sys.stderr)
             return getattr(exc, "exit_code", 1) or 1
 
+        if _rl_fired:
+            cred = rotation.rotate(store)
+            if cred is None:
+                print("[cc-creds] All credentials exhausted (rate limit event).", file=sys.stderr)
+                return 1
+            continue
+
         if result_msg is not None:
             usage = getattr(result_msg, "usage", None) or {}
             input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
@@ -265,8 +272,8 @@ async def run(
             if is_error:
                 if detection.is_rate_limited(result_msg, last_assistant_text):
                     reset_at = detection.parse_reset_time(last_assistant_text)
-                    store.mark_limited(cred.id, reset_at=reset_at)
-                    log.debug(f"rate limit via ResultMessage  cred={cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  api_error_status={getattr(result_msg, 'api_error_status', None)}  → rotating")
+                    store.mark_limited(attempt_cred.id, reset_at=reset_at)
+                    log.debug(f"rate limit via ResultMessage  cred={attempt_cred.id[:8]}  reset_at={reset_at.isoformat() if reset_at else None}  api_error_status={getattr(result_msg, 'api_error_status', None)}  → rotating")
                     if sid:
                         store.update_session(sid, cost_usd=cost, input_tokens=input_tokens,
                                              output_tokens=output_tokens, status="interrupted")
