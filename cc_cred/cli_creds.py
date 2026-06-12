@@ -297,6 +297,30 @@ def rotate() -> None:
 
 
 @main.command()
+def activate() -> None:
+    """Emit a PowerShell command to set the active credential in the current session.
+
+    Run as: Invoke-Expression (cc-creds activate)
+
+    The token is read from disk at eval time by the shell — it is never
+    printed to the terminal by this command.
+    """
+    store = CredStore()
+    active = store.get_active()
+    if active is None:
+        err_console.print("[red]No active credential set. Run cc-creds set-active first.[/]")
+        sys.exit(1)
+
+    creds_path = store._credentials_path().as_posix()
+    active_path = store._active_path().as_posix()
+
+    print(f"# Activating: {active.label or active.id[:8]}")
+    print(
+        f'$env:CLAUDE_CODE_OAUTH_TOKEN=(python3 -c "import json; creds=json.load(open(r\'{creds_path}\')); key=open(r\'{active_path}\').read().strip(); print(next(c[\'token\'] for c in creds if c[\'id\']==key))")'
+    )
+
+
+@main.command()
 def deactivate() -> None:
     """Remove active credential and return to your main OAuth session.
 
@@ -309,7 +333,9 @@ def deactivate() -> None:
     label = (active.label or active.id[:8]) if active else None
     store.deactivate()
     if label:
-        console.print(f"[green]Deactivated[/] {label}. Open a new terminal to use your OAuth session.")
+        console.print(f"[green]Deactivated[/] {label}.")
+        console.print(f"[dim]Run to clear from current session:[/]")
+        console.print(f"Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue")
     else:
         console.print("[yellow]No active credential was set.[/]")
 
