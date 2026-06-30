@@ -28,7 +28,11 @@ def _fresh_check(store: CredStore, cred: Credential) -> bool:
 
 
 def _needs_fresh_check(store: CredStore, cred_id: str) -> bool:
-    """Return True if the credential's status warrants an API re-verify."""
+    """Return True if the credential's status warrants an API re-verify.
+
+    Re-verifies credentials with 'unknown' or 'limited' status (with or without reset_at)
+    after the retry TTL has passed, allowing early recovery if Anthropic lifts the rate limit.
+    """
     status = store.get_status(cred_id)
     if status.status == "unknown":
         if status.last_checked:
@@ -36,7 +40,7 @@ def _needs_fresh_check(store: CredStore, cred_id: str) -> bool:
             if age < NETWORK_FAILURE_RETRY_SECS:
                 return False
         return True
-    if status.status == "limited" and status.reset_at is None:
+    if status.status == "limited":
         if status.last_checked:
             age = (datetime.now(timezone.utc) - datetime.fromisoformat(status.last_checked)).total_seconds()
             if age < NETWORK_FAILURE_RETRY_SECS:
@@ -53,10 +57,9 @@ def get_next_available(
     """Return the next available credential, starting after exclude_id (round-robin).
 
     When recheck=True (set by rotate()), credentials with stale status
-    (unknown or indefinitely-limited with no reset_at) are re-verified via
-    the API before being considered. This ensures force-limit test artefacts
-    and genuinely bricked credentials recover automatically once the
-    underlying condition clears.
+    (unknown or limited) are re-verified via the API before being considered.
+    This ensures force-limit test artefacts and genuinely bricked credentials
+    recover automatically once the underlying condition clears.
     """
     log = get_logger()
     credentials = store.list()
