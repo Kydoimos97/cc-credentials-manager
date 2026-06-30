@@ -1,10 +1,11 @@
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
+import json
 
 import pytest
 
 from cc_cred.store import CredStore
-from cc_cred.rotation import get_next_available, rotate
+from cc_cred.rotation import get_next_available, rotate, _needs_fresh_check
 
 
 @pytest.fixture(autouse=True)
@@ -108,3 +109,54 @@ def test_rotate_with_no_active(store):
     result = rotate(store)
     assert result is not None
     assert result.id == c1.id
+
+
+def test_needs_fresh_check_limited_with_reset_at_stale(store):
+    """Test that _needs_fresh_check returns True for limited with future reset_at after retry TTL.
+
+    This was the broken case: _needs_fresh_check previously had 'and status.reset_at is None',
+    which meant it never re-verified a limited credential with a future reset_at timestamp.
+    """
+    c1 = store.add("sk-ant-t1", "a")
+    future = datetime.now(timezone.utc) + timedelta(hours=8)
+    store.mark_limited(c1.id, reset_at=future)
+
+    # Backdate last_checked to 1 hour ago (> NETWORK_FAILURE_RETRY_SECS)
+    status_path = store._status_path()
+    status_dict = json.loads(status_path.read_text())
+    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    status_dict[c1.id]["last_checked"] = one_hour_ago
+    status_path.write_text(json.dumps(status_dict))
+
+    # Should return True because age > NETWORK_FAILURE_RETRY_SECS
+    assert _needs_fresh_check(store, c1.id) is True
+
+
+def test_rotate_recovers_limited_with_future_reset_at(store):
+    """Test that rotate can recover a limited credential with future reset_at via live check.
+
+    Both credentials are limited with future reset_at. When rotate calls get_next_available
+    with recheck=True, it discovers via _fresh_check that c2 is actually available.
+    """
+    c1 = store.add("sk-ant-t1", "a")
+    c2 = store.add("sk-ant-t2", "b")
+    store.set_active(c1.id)
+
+    future = datetime.now(timezone.utc) + timedelta(hours=8)
+    store.mark_limited(c1.id, reset_at=future)
+    store.mark_limited(c2.id, reset_at=future)
+
+    # Backdate c2's last_checked to 1 hour ago so it becomes a candidate for fresh check
+    status_path = store._status_path()
+    status_dict = json.loads(status_path.read_text())
+    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    status_dict[c2.id]["last_checked"] = one_hour_ago
+    status_path.write_text(json.dumps(status_dict))
+
+    # Patch _fresh_check to return True for c2, simulating successful live recovery
+    with patch("cc_cred.rotation._fresh_check", return_value=True):
+        result = rotate(store)
+
+    assert result is not None
+    assert result.id == c2.id
+    assert store.get_active().id == c2.id
